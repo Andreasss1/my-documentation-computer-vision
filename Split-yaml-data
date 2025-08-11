@@ -1,0 +1,108 @@
+import shutil
+import random
+
+def split_dataset(dataset_dir, train_pct=0.9):
+    """Split dataset into train and validation folders."""
+    images_dir = os.path.join(dataset_dir, "images")
+    labels_dir = os.path.join(dataset_dir, "labels")
+
+    train_img_dir = os.path.join(dataset_dir, "train", "images")
+    train_lbl_dir = os.path.join(dataset_dir, "train", "labels")
+    val_img_dir = os.path.join(dataset_dir, "validation", "images")
+    val_lbl_dir = os.path.join(dataset_dir, "validation", "labels")
+
+    # Buat folder train/validation
+    for d in [train_img_dir, train_lbl_dir, val_img_dir, val_lbl_dir]:
+        os.makedirs(d, exist_ok=True)
+
+    # Ambil semua file gambar
+    images = [f for f in os.listdir(images_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+    random.shuffle(images)
+
+    split_idx = int(len(images) * train_pct)
+    train_files = images[:split_idx]
+    val_files = images[split_idx:]
+
+    # Pindahkan file ke folder masing-masing
+    for img in train_files:
+        lbl = os.path.splitext(img)[0] + ".txt"
+        shutil.copy2(os.path.join(images_dir, img), train_img_dir)
+        shutil.copy2(os.path.join(labels_dir, lbl), train_lbl_dir)
+
+    for img in val_files:
+        lbl = os.path.splitext(img)[0] + ".txt"
+        shutil.copy2(os.path.join(images_dir, img), val_img_dir)
+        shutil.copy2(os.path.join(labels_dir, lbl), val_lbl_dir)
+
+    print(f"Dataset split: {len(train_files)} train, {len(val_files)} validation")
+
+def main():
+    print("YOLO OBJECT DETECTION & COUNTING SYSTEM")
+    print("=" * 60)
+
+    # Configuration
+    zip_path = "/content/box6.zip"
+    extract_dir = "/content/extracted_video"
+    output_frames_dir = "/content/frames"
+    data_zip_path = "/content/data-data-box-box.zip"
+    data_extract_dir = "/content/data-box"
+    classes_path = "/content/data-box/classes.txt"
+    yaml_path = "/content/data.yaml"
+    video_path = "/content/box6.mp4"
+    model_path = "/content/runs/detect/train/weights/best.pt"
+    output_path = "/content/output_box6_counting.mp4"
+
+    # Step 1: Extract ZIP files
+    print("Extracting ZIP files...")
+    extract_zip(zip_path, extract_dir)
+    extract_zip(data_zip_path, data_extract_dir)
+
+    # Step 2: Extract frames from video
+    print("\nExtracting frames from video...")
+    video_file = None
+    for file in os.listdir(extract_dir):
+        if file.endswith(('.mp4', '.avi', '.mov')):
+            video_file = os.path.join(extract_dir, file)
+            break
+
+    if video_file:
+        extract_frames_from_video(video_file, output_frames_dir)
+    else:
+        print(f"Error: No video file found in {extract_dir}")
+        return
+
+    # Step 3: Split dataset (langsung pakai fungsi Python, tanpa os.system)
+    print("\nSplitting dataset...")
+    split_dataset(data_extract_dir, train_pct=0.9)
+
+    # Step 4: Create YAML configuration otomatis sesuai hasil split
+    print("\nCreating YAML configuration...")
+    create_data_yaml(classes_path, yaml_path)
+
+    # Step 5: Train YOLO model
+    print("\nTraining YOLOv8 model...")
+    model = YOLO("yolov8n.pt")
+    model.train(data=yaml_path, epochs=50)
+
+    # Step 6: Analyze video
+    print("\nAnalyzing video...")
+    if not os.path.exists(video_path):
+        print(f"Error: Video not found at {video_path}")
+        return
+
+    if not os.path.exists(model_path):
+        print(f"Error: Model not found at {model_path}")
+        return
+
+    analyze_video_statistics(video_path)
+
+    # Step 7: Process video with counting
+    print("\nProcessing video with counting...")
+    process_video_with_counting(model_path, video_path, output_path, conf_threshold=0.4)
+
+    # Step 8: Download output
+    print("\nDownloading output video...")
+    files.download(output_path)
+
+    print("\nProcess completed!")
+    print("=" * 60)
