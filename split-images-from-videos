@@ -1,0 +1,76 @@
+import cv2
+import os
+import zipfile
+
+def extract_frames_from_video(video_path, output_dir, frame_interval=30):
+
+    # Buat direktori output
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Buka file video
+    cap = cv2.VideoCapture(video_path)
+
+    if not cap.isOpened():
+        print(f"Error: Tidak dapat membuka video {video_path}")
+        return
+
+    # Dapatkan informasi video
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    print(f"FPS: {fps}, Total Frames: {total_frames}")
+
+    count = 0
+    saved_count = 0
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Simpan frame setiap interval yang ditentukan
+        if count % frame_interval == 0:
+            # Nama file dengan format: frame_00001.jpg
+            output_path = os.path.join(output_dir, f'frame_{saved_count:05d}.jpg')
+            cv2.imwrite(output_path, frame)
+            saved_count += 1
+            print(f"Frame {count} disimpan sebagai {output_path}")
+
+        count += 1
+
+    cap.release()
+    print(f"Total {saved_count} frame disimpan")
+
+def extract_zip(zip_path, extract_to):
+
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_to)
+    print(f"File zip diekstrak ke {extract_to}")
+
+def main():
+    # Path ke file zip
+    zip_path = '/content/box6.zip'
+    # Direktori untuk ekstrak zip
+    extract_dir = '/content/extracted_video'
+    # Direktori untuk menyimpan frame
+    output_frames_dir = '/content/frames'
+
+    # Ekstrak file zip
+    extract_zip(zip_path, extract_dir)
+
+    # Asumsikan video berada di dalam folder yang diekstrak
+    # Ganti 'video.mp4' dengan nama file video yang sebenarnya
+    video_file = None
+    for file in os.listdir(extract_dir):
+        if file.endswith(('.mp4', '.avi', '.mov')):  # Tambahkan ekstensi video lain jika perlu
+            video_file = os.path.join(extract_dir, file)
+            break
+
+    if video_file:
+        # Ekstrak frame dari video
+        extract_frames_from_video(video_file, output_frames_dir)
+    else:
+        print("Error: Tidak ditemukan file video di direktori yang diekstrak")
+
+if __name__ == "__main__":
+    main()
