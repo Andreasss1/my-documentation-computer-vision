@@ -1,0 +1,43 @@
+<!-- Template Node Code untuk Node-RED -->
+<style>
+    .status-display {
+        width: 200px;
+        height: 80px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 32px;
+        font-weight: bold;
+        color: white;
+        border-radius: 10px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin: 20px auto;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        transition: all 0.3s ease;
+    }
+    
+    .pass-status {
+        background-color: #4CAF50;
+    }
+    
+    .ng-status {
+        background-color: #f44336;
+        animation: blink 1s infinite;
+    }
+    
+    @keyframes blink {
+        0%, 50% { opacity: 1; }
+        51%, 100% { opacity: 0.7; }
+    }
+</style>
+
+<div class="status-display {{#if payload}}ng-status{{else}}pass-status{{/if}}">
+    {{#if payload}}NG{{else}}PASS{{/if}}
+</div>
+
+<!-- Info tambahan -->
+<div style="text-align: center; margin-top: 10px; font-family: Arial;">
+    <p><strong>Input:</strong> {{#if payload}}ON{{else}}OFF{{/if}}</p>
+    <p><strong>Time:</strong> {{timestamp}}</p>
+</div>
