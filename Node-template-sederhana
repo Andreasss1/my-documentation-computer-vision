@@ -1,221 +1,82 @@
-<!-- Template Node Code untuk Node-RED -->
-<style>
-    .status-display {
-        width: 200px;
-        height: 80px;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        font-size: 32px;
-        font-weight: bold;
-        color: white;
-        border-radius: 10px;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        margin: 20px auto;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-        transition: all 0.3s ease;
-    }
-    
-    .pass-status {
-        background-color: #4CAF50;
-    }
-    
-    .ng-status {
-        background-color: #f44336;
-        animation: blink 1s infinite;
-    }
-    
-    @keyframes blink {
-        0%, 50% { opacity: 1; }
-        51%, 100% { opacity: 0.7; }
-    }
-</style>
+import cv2
+import numpy as np
+from ultralytics import YOLO
+import base64
+import json
 
-<div class="status-display {{#if payload}}ng-status{{else}}pass-status{{/if}}">
-    {{#if payload}}NG{{else}}PASS{{/if}}
+# Load YOLO model
+model = YOLO('best.pt')
+
+# Initialize camera
+cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    msg['payload'] = {"error": "Cannot open camera"}
+    return msg
+
+# Read frame
+ret, frame = cap.read()
+if not ret:
+    msg['payload'] = {"error": "Cannot read frame"}
+    return msg
+
+# Run YOLO inference
+results = model(frame)
+
+# Draw results on frame
+annotated_frame = results[0].plot()
+
+# Convert to base64 for web display
+_, buffer = cv2.imencode('.jpg', annotated_frame)
+img_base64 = base64.b64encode(buffer).decode('utf-8')
+
+# Prepare detection data
+detections = []
+for r in results:
+    boxes = r.boxes
+    if boxes is not None:
+        for box in boxes:
+            detections.append({
+                "class": int(box.cls[0]),
+                "confidence": float(box.conf[0]),
+                "bbox": box.xyxy[0].tolist()
+            })
+
+cap.release()
+
+msg['payload'] = {
+    "image": f"data:image/jpeg;base64,{img_base64}",
+    "detections": detections
+}
+
+return msg
+
+// templates: 
+<div ng-bind-html="msg.payload.html">
+    <h3>YOLO Object Detection</h3>
+    <div id="detection-container">
+        <img ng-if="msg.payload.image" 
+             ng-src="{{msg.payload.image}}" 
+             style="max-width: 100%; height: auto;">
+        
+        <div ng-if="msg.payload.detections">
+            <h4>Detections: {{msg.payload.detections.length}}</h4>
+            <ul>
+                <li ng-repeat="det in msg.payload.detections">
+                    Class: {{det.class}}, 
+                    Confidence: {{(det.confidence * 100).toFixed(1)}}%
+                </li>
+            </ul>
+        </div>
+    </div>
 </div>
 
-<!-- Info tambahan -->
-<div style="text-align: center; margin-top: 10px; font-family: Arial;">
-    <p><strong>Input:</strong> {{#if payload}}ON{{else}}OFF{{/if}}</p>
-    <p><strong>Time:</strong> {{timestamp}}</p>
-</div>
-
-// JSON:
-[
-    {
-        "id": "input-inject-off",
-        "type": "inject",
-        "z": "flow1",
-        "name": "Input OFF",
-        "props": [
-            {
-                "p": "payload"
-            }
-        ],
-        "repeat": "",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "",
-        "payload": "false",
-        "payloadType": "bool",
-        "x": 120,
-        "y": 100,
-        "wires": [
-            [
-                "status-processor"
-            ]
-        ]
-    },
-    {
-        "id": "input-inject-on",
-        "type": "inject",
-        "z": "flow1",
-        "name": "Input ON",
-        "props": [
-            {
-                "p": "payload"
-            }
-        ],
-        "repeat": "",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "",
-        "payload": "true",
-        "payloadType": "bool",
-        "x": 120,
-        "y": 160,
-        "wires": [
-            [
-                "status-processor"
-            ]
-        ]
-    },
-    {
-        "id": "status-processor",
-        "type": "function",
-        "z": "flow1",
-        "name": "Process Status",
-        "func": "// Process input untuk menentukan status\nlet status = {\n    payload: msg.payload, // true = ON, false = OFF\n    timestamp: new Date().toLocaleString(),\n    statusText: msg.payload ? \"NG\" : \"PASS\",\n    statusColor: msg.payload ? \"red\" : \"green\",\n    inputText: msg.payload ? \"ON\" : \"OFF\"\n};\n\n// Log untuk debugging\nnode.log(`Input: ${status.inputText}, Status: ${status.statusText}`);\n\n// Set node status indicator\nif (msg.payload) {\n    node.status({fill: \"red\", shape: \"dot\", text: \"NG - Input ON\"});\n} else {\n    node.status({fill: \"green\", shape: \"dot\", text: \"PASS - Input OFF\"});\n}\n\nreturn status;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 320,
-        "y": 130,
-        "wires": [
-            [
-                "status-template",
-                "debug-output"
-            ]
-        ]
-    },
-    {
-        "id": "status-template",
-        "type": "template",
-        "z": "flow1",
-        "name": "Status Display",
-        "field": "payload",
-        "fieldType": "msg",
-        "format": "html",
-        "syntax": "mustache",
-        "template": "<!DOCTYPE html>\n<html>\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Status Display</title>\n    <style>\n        body {\n            margin: 0;\n            padding: 20px;\n            font-family: 'Arial', sans-serif;\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            min-height: 100vh;\n            display: flex;\n            flex-direction: column;\n            align-items: center;\n            justify-content: center;\n        }\n        \n        .status-container {\n            width: 350px;\n            height: 180px;\n            display: flex;\n            justify-content: center;\n            align-items: center;\n            border-radius: 20px;\n            box-shadow: 0 15px 35px rgba(0,0,0,0.3);\n            transition: all 0.3s ease;\n            margin-bottom: 30px;\n        }\n        \n        .status-text {\n            font-size: 56px;\n            font-weight: bold;\n            text-transform: uppercase;\n            letter-spacing: 4px;\n            text-shadow: 3px 3px 6px rgba(0,0,0,0.4);\n        }\n        \n        /* Status PASS - Input OFF */\n        .pass {\n            background: linear-gradient(135deg, #4CAF50, #45a049);\n            color: white;\n            border: 4px solid #2e7d32;\n        }\n        \n        /* Status NG - Input ON */\n        .ng {\n            background: linear-gradient(135deg, #f44336, #d32f2f);\n            color: white;\n            border: 4px solid #c62828;\n            animation: pulse-red 1.5s infinite;\n        }\n        \n        @keyframes pulse-red {\n            0% {\n                transform: scale(1);\n                box-shadow: 0 15px 35px rgba(244, 67, 54, 0.3);\n            }\n            50% {\n                transform: scale(1.02);\n                box-shadow: 0 20px 45px rgba(244, 67, 54, 0.5);\n            }\n            100% {\n                transform: scale(1);\n                box-shadow: 0 15px 35px rgba(244, 67, 54, 0.3);\n            }\n        }\n        \n        .info-panel {\n            background: rgba(255,255,255,0.95);\n            padding: 20px;\n            border-radius: 15px;\n            box-shadow: 0 8px 25px rgba(0,0,0,0.2);\n            text-align: center;\n            min-width: 300px;\n        }\n        \n        .info-row {\n            margin: 10px 0;\n            font-size: 16px;\n        }\n        \n        .label {\n            font-weight: bold;\n            color: #333;\n        }\n        \n        .value {\n            color: #666;\n            margin-left: 10px;\n        }\n        \n        .input-status {\n            padding: 5px 15px;\n            border-radius: 20px;\n            font-weight: bold;\n            color: white;\n        }\n        \n        .input-on {\n            background-color: #ff5722;\n        }\n        \n        .input-off {\n            background-color: #4caf50;\n        }\n        \n        @media (max-width: 600px) {\n            .status-container {\n                width: 280px;\n                height: 140px;\n            }\n            \n            .status-text {\n                font-size: 42px;\n            }\n            \n            .info-panel {\n                min-width: 250px;\n                padding: 15px;\n            }\n        }\n    </style>\n</head>\n<body>\n    <div class=\"status-container {{#if payload}}ng{{else}}pass{{/if}}\">\n        <div class=\"status-text\">\n            {{statusText}}\n        </div>\n    </div>\n    \n    <div class=\"info-panel\">\n        <div class=\"info-row\">\n            <span class=\"label\">Input Status:</span>\n            <span class=\"input-status {{#if payload}}input-on{{else}}input-off{{/if}}\">\n                {{inputText}}\n            </span>\n        </div>\n        <div class=\"info-row\">\n            <span class=\"label\">Quality Status:</span>\n            <span class=\"value\">{{statusText}}</span>\n        </div>\n        <div class=\"info-row\">\n            <span class=\"label\">Last Update:</span>\n            <span class=\"value\">{{timestamp}}</span>\n        </div>\n        <div class=\"info-row\">\n            <span class=\"label\">System:</span>\n            <span class=\"value\">Quality Control Monitor</span>\n        </div>\n    </div>\n    \n    <script>\n        // Auto refresh untuk real-time update\n        let refreshInterval = setInterval(function() {\n            // Cek jika ada update baru\n            fetch(window.location.href)\n                .then(response => response.text())\n                .then(html => {\n                    // Update hanya jika ada perubahan\n                    if (document.documentElement.outerHTML !== html) {\n                        location.reload();\n                    }\n                })\n                .catch(err => console.log('Refresh error:', err));\n        }, 1000);\n        \n        // Clear interval saat page unload\n        window.addEventListener('beforeunload', function() {\n            clearInterval(refreshInterval);\n        });\n        \n        // Optional: Sound notification\n        function playSound(isNG) {\n            if ('speechSynthesis' in window) {\n                const utterance = new SpeechSynthesisUtterance(\n                    isNG ? 'NG Status Detected' : 'Pass Status'\n                );\n                utterance.volume = 0.3;\n                utterance.rate = 1;\n                // speechSynthesis.speak(utterance); // Uncomment untuk aktifkan\n            }\n        }\n    </script>\n</body>\n</html>",
-        "output": "str",
-        "x": 520,
-        "y": 100,
-        "wires": [
-            [
-                "http-response"
-            ]
-        ]
-    },
-    {
-        "id": "debug-output",
-        "type": "debug",
-        "z": "flow1",
-        "name": "Debug Status",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 520,
-        "y": 160,
-        "wires": []
-    },
-    {
-        "id": "http-response",
-        "type": "http response",
-        "z": "flow1",
-        "name": "HTTP Response",
-        "statusCode": "",
-        "headers": {
-            "content-type": "text/html"
-        },
-        "x": 720,
-        "y": 100,
-        "wires": []
-    },
-    {
-        "id": "http-input",
-        "type": "http in",
-        "z": "flow1",
-        "name": "Status Endpoint",
-        "url": "/status",
-        "method": "get",
-        "upload": false,
-        "swaggerDoc": "",
-        "x": 130,
-        "y": 220,
-        "wires": [
-            [
-                "get-current-status"
-            ]
-        ]
-    },
-    {
-        "id": "get-current-status",
-        "type": "function",
-        "z": "flow1",
-        "name": "Get Current Status",
-        "func": "// Ambil status terbaru dari global context atau default ke OFF\nlet currentPayload = global.get('currentStatus') || false;\n\nmsg.payload = currentPayload;\nmsg.timestamp = new Date().toLocaleString();\nmsg.statusText = currentPayload ? \"NG\" : \"PASS\";\nmsg.statusColor = currentPayload ? \"red\" : \"green\";\nmsg.inputText = currentPayload ? \"ON\" : \"OFF\";\n\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 340,
-        "y": 220,
-        "wires": [
-            [
-                "status-template"
-            ]
-        ]
-    },
-    {
-        "id": "save-status",
-        "type": "function",
-        "z": "flow1",
-        "name": "Save Status",
-        "func": "// Simpan status ke global context\nglobal.set('currentStatus', msg.payload);\n\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 320,
-        "y": 80,
-        "wires": [
-            [
-                "status-processor"
-            ]
-        ]
-    }
-]
+<script>
+(function(scope) {
+    scope.$watch('msg', function(newVal) {
+        if (newVal && newVal.payload) {
+            // Update image and detection info
+        }
+    });
+})(scope);
+</script>
