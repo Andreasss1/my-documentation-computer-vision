@@ -1,0 +1,979 @@
+# =========================
+# Node-red
+# =========================
+[
+    {
+        "id": "58e559bc26ac85af",
+        "type": "tab",
+        "label": "YOLO HP Inspection",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "93537fa4d8672700",
+        "type": "inject",
+        "z": "58e559bc26ac85af",
+        "name": "🟢 Start YOLO Server",
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "topic": "",
+        "payload": "start",
+        "payloadType": "str",
+        "x": 150,
+        "y": 100,
+        "wires": [
+            [
+                "e78c3f24844dfa47",
+                "82de108b7cb6516c"
+            ]
+        ]
+    },
+    {
+        "id": "e78c3f24844dfa47",
+        "type": "delay",
+        "z": "58e559bc26ac85af",
+        "name": "Wait 8s",
+        "pauseType": "delay",
+        "timeout": "8",
+        "timeoutUnits": "seconds",
+        "rate": "1",
+        "nbRateUnits": "1",
+        "rateUnits": "second",
+        "randomFirst": "1",
+        "randomLast": "5",
+        "randomUnits": "seconds",
+        "drop": false,
+        "outputs": 1,
+        "x": 370,
+        "y": 140,
+        "wires": [
+            [
+                "1ad1c4e9ebe2338b"
+            ]
+        ]
+    },
+    {
+        "id": "82de108b7cb6516c",
+        "type": "exec",
+        "z": "58e559bc26ac85af",
+        "command": "python",
+        "addpay": false,
+        "append": "C:\\Users\\Andreas\\yolo_realtime.py",
+        "useSpawn": "true",
+        "timer": "",
+        "name": "Start Python Server",
+        "x": 380,
+        "y": 80,
+        "wires": [
+            [
+                "21635d88aa0a79b3"
+            ],
+            [
+                "cfa316de60fa2ae0"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "21635d88aa0a79b3",
+        "type": "debug",
+        "z": "58e559bc26ac85af",
+        "name": "Server Info",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 600,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "cfa316de60fa2ae0",
+        "type": "debug",
+        "z": "58e559bc26ac85af",
+        "name": "Server Error",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 600,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "1ad1c4e9ebe2338b",
+        "type": "function",
+        "z": "58e559bc26ac85af",
+        "name": "Show Video Stream",
+        "func": "// Enhanced video display with HP detection box overlay\nmsg.payload = `\n<div style=\"text-align: center; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px; color: white;\">\n    <h2 style=\"margin-bottom: 20px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);\">📱 YOLO HP Defect Inspection - LIVE</h2>\n    \n    <div style=\"position: relative; display: inline-block; background: white; padding: 10px; border-radius: 10px; box-shadow: 0 8px 16px rgba(0,0,0,0.3);\">\n        <!-- Loading indicator -->\n        <div id=\"loadingIndicator\" style=\"position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 20px; border-radius: 8px; z-index: 10;\">\n            🔄 Loading video stream...\n        </div>\n        \n        <!-- Main video stream -->\n        <img id=\"videoStream\" \n             src=\"\" \n             style=\"max-width: 100%; max-height: 400px; border: 2px solid #007acc; border-radius: 8px; display: block; min-height: 300px; min-width: 400px; background: #f0f0f0;\" \n             onload=\"handleImageLoad(this);\"\n             onerror=\"handleImageError(this);\"/> \n        \n        <!-- Error message -->\n        <div id=\"errorMsg\" style=\"position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; padding: 20px; background: rgba(248,249,250,0.95); border: 2px dashed #dc3545; border-radius: 8px; color: #dc3545; font-weight: bold; text-align: center; z-index: 5;\">\n            ⚠️ Cannot connect to video stream<br>\n            <small style=\"color: #6c757d;\">Server status: <span id=\"serverStatus\">Checking...</span></small><br>\n            <div style=\"margin-top: 10px;\">\n                <button onclick=\"forceReload()\" style=\"padding: 8px 16px; background: #007acc; color: white; border: none; border-radius: 4px; cursor: pointer; margin: 2px;\">🔄 Retry</button>\n                <button onclick=\"openVideoInNewTab()\" style=\"padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; margin: 2px;\">🌐 Open Direct</button>\n            </div>\n        </div>\n        \n        <!-- LIVE indicator -->\n        <div id=\"liveIndicator\" style=\"position: absolute; top: 15px; right: 15px; background: rgba(255,0,0,0.9); color: white; padding: 5px 10px; border-radius: 20px; font-weight: bold; font-size: 12px; display: none; animation: blink 1s infinite;\">🔴 LIVE</div>\n    </div>\n    \n    <!-- Connection info -->\n    <div style=\"margin-top: 15px; background: rgba(255,255,255,0.2); padding: 10px; border-radius: 8px;\">\n        <p style=\"margin: 5px 0; font-weight: bold;\">📡 Stream URL: http://127.0.0.1:8000/video</p>\n        <p style=\"margin: 5px 0;\">📊 Data URL: http://127.0.0.1:8000/data</p>\n        <p id=\"connectionStatus\" style=\"margin: 5px 0; font-size: 12px;\">🔄 Initializing...</p>\n        <div style=\"margin-top: 10px;\">\n            <button onclick=\"testConnection()\" style=\"padding: 5px 10px; background: rgba(255,255,255,0.3); color: white; border: 1px solid white; border-radius: 4px; cursor: pointer; margin: 2px;\">🔍 Test Connection</button>\n            <button onclick=\"refreshPage()\" style=\"padding: 5px 10px; background: rgba(255,255,255,0.3); color: white; border: 1px solid white; border-radius: 4px; cursor: pointer; margin: 2px;\">🔄 Refresh Page</button>\n        </div>\n    </div>\n</div>\n\n<style>\n@keyframes blink {\n    0%, 50% { opacity: 1; }\n    51%, 100% { opacity: 0.3; }\n}\n#videoStream {\n    transition: opacity 0.3s ease;\n}\n</style>\n\n<script>\nlet retryAttempts = 0;\nconst maxRetries = 15;\nlet connectionCheckInterval;\nlet videoLoadTimeout;\n\nfunction log(message) {\n    console.log('[VideoStream] ' + message);\n    updateStatus('🔍 ' + message);\n}\n\nfunction updateStatus(message) {\n    const statusEl = document.getElementById('connectionStatus');\n    if (statusEl) {\n        statusEl.innerHTML = message;\n    }\n}\n\nfunction handleImageLoad(img) {\n    log('Video stream loaded successfully!');\n    img.style.display = 'block';\n    img.style.opacity = '1';\n    \n    // Hide loading and error indicators\n    const loading = document.getElementById('loadingIndicator');\n    const error = document.getElementById('errorMsg');\n    const live = document.getElementById('liveIndicator');\n    \n    if (loading) loading.style.display = 'none';\n    if (error) error.style.display = 'none';\n    if (live) live.style.display = 'block';\n    \n    updateStatus('✅ Connected & Streaming');\n    retryAttempts = 0; // Reset on success\n}\n\nfunction handleImageError(img) {\n    log('Image failed to load, attempt: ' + (retryAttempts + 1));\n    \n    img.style.opacity = '0.3';\n    \n    // Show error message\n    const loading = document.getElementById('loadingIndicator');\n    const error = document.getElementById('errorMsg');\n    const live = document.getElementById('liveIndicator');\n    \n    if (loading) loading.style.display = 'none';\n    if (error) error.style.display = 'block';\n    if (live) live.style.display = 'none';\n    \n    // Check server status\n    checkServerStatus();\n    \n    // Auto retry with increasing delays\n    if (retryAttempts < maxRetries) {\n        const delay = Math.min(2000 + (retryAttempts * 1000), 10000);\n        updateStatus(\\`❌ Failed - Retrying in \\${delay/1000}s... (\\${retryAttempts + 1}/\\${maxRetries})\\`);\n        \n        setTimeout(() => {\n            attemptVideoLoad();\n        }, delay);\n    } else {\n        updateStatus('❌ Max retries reached - Click Retry button');\n    }\n}\n\nfunction attemptVideoLoad() {\n    retryAttempts++;\n    log('Attempting to load video stream, try: ' + retryAttempts);\n    \n    const img = document.getElementById('videoStream');\n    if (!img) return;\n    \n    // Clear any existing timeout\n    if (videoLoadTimeout) {\n        clearTimeout(videoLoadTimeout);\n    }\n    \n    // Add timestamp to prevent caching\n    const timestamp = new Date().getTime();\n    const randomId = Math.random().toString(36).substr(2, 9);\n    \n    img.src = \\`http://127.0.0.1:8000/video?\\${timestamp}&r=\\${randomId}\\`;\n    \n    // Set a timeout for loading\n    videoLoadTimeout = setTimeout(() => {\n        if (img.style.opacity !== '1') {\n            log('Video load timeout after 10 seconds');\n            handleImageError(img);\n        }\n    }, 10000);\n}\n\nfunction forceReload() {\n    log('Force reload requested');\n    retryAttempts = 0;\n    attemptVideoLoad();\n}\n\nfunction checkServerStatus() {\n    fetch('http://127.0.0.1:8000/data')\n        .then(response => response.json())\n        .then(data => {\n            const serverStatusEl = document.getElementById('serverStatus');\n            if (serverStatusEl) {\n                serverStatusEl.innerHTML = \\`Running (Frame: \\${data.frame_count})\\`;\n            }\n            log('Server is responding with frame: ' + data.frame_count);\n        })\n        .catch(error => {\n            const serverStatusEl = document.getElementById('serverStatus');\n            if (serverStatusEl) {\n                serverStatusEl.innerHTML = 'Not responding';\n            }\n            log('Server check failed: ' + error.message);\n        });\n}\n\nfunction testConnection() {\n    log('Testing connection manually...');\n    updateStatus('🔍 Testing connection...');\n    \n    Promise.all([\n        fetch('http://127.0.0.1:8000/data'),\n        fetch('http://127.0.0.1:8000/video', { method: 'HEAD' })\n    ]).then(responses => {\n        const dataOk = responses[0].ok;\n        const videoOk = responses[1].ok;\n        \n        if (dataOk && videoOk) {\n            updateStatus('✅ Both endpoints responding - Attempting video load');\n            forceReload();\n        } else {\n            updateStatus(\\`❌ Data: \\${dataOk ? 'OK' : 'FAIL'}, Video: \\${videoOk ? 'OK' : 'FAIL'}\\`);\n        }\n    }).catch(error => {\n        updateStatus('❌ Connection test failed: ' + error.message);\n    });\n}\n\nfunction openVideoInNewTab() {\n    window.open('http://127.0.0.1:8000/video', '_blank');\n}\n\nfunction refreshPage() {\n    location.reload();\n}\n\n// Initialize video loading\nfunction initializeVideo() {\n    log('Initializing video stream...');\n    updateStatus('🔄 Initializing video stream...');\n    \n    // Show loading indicator\n    const loading = document.getElementById('loadingIndicator');\n    if (loading) loading.style.display = 'block';\n    \n    // Wait a bit for server to be ready, then start loading\n    setTimeout(() => {\n        attemptVideoLoad();\n    }, 1000);\n    \n    // Start periodic server status checks\n    connectionCheckInterval = setInterval(checkServerStatus, 5000);\n}\n\n// Start initialization when DOM is ready\nif (document.readyState === 'loading') {\n    document.addEventListener('DOMContentLoaded', initializeVideo);\n} else {\n    initializeVideo();\n}\n\n// Cleanup on page unload\nwindow.addEventListener('beforeunload', function() {\n    if (connectionCheckInterval) {\n        clearInterval(connectionCheckInterval);\n    }\n    if (videoLoadTimeout) {\n        clearTimeout(videoLoadTimeout);\n    }\n});\n</script>\n`;\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 590,
+        "y": 140,
+        "wires": [
+            [
+                "9337d0aee0cdf2bd"
+            ]
+        ]
+    },
+    {
+        "id": "9337d0aee0cdf2bd",
+        "type": "ui_template",
+        "z": "58e559bc26ac85af",
+        "group": "video_group",
+        "name": "Video Stream Display",
+        "order": 1,
+        "width": 12,
+        "height": 10,
+        "format": "<div ng-bind-html=\"msg.payload | trusted\"></div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "x": 860,
+        "y": 240,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "da14d9115ff75abe",
+        "type": "inject",
+        "z": "58e559bc26ac85af",
+        "name": "📊 Fetch Data (1s)",
+        "repeat": "1",
+        "crontab": "",
+        "once": false,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 220,
+        "wires": [
+            [
+                "1a87fedf406f5780"
+            ]
+        ]
+    },
+    {
+        "id": "1a87fedf406f5780",
+        "type": "http request",
+        "z": "58e559bc26ac85af",
+        "name": "Get Detection Data",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://127.0.0.1:8000/data",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 450,
+        "y": 320,
+        "wires": [
+            [
+                "25b69c39312b046f"
+            ]
+        ]
+    },
+    {
+        "id": "25b69c39312b046f",
+        "type": "function",
+        "z": "58e559bc26ac85af",
+        "name": "Process HP Inspection Data",
+        "func": "// Enhanced processing for HP inspection with NG/PASS system\ntry {\n    // Check if we have valid data\n    if (!msg.payload || typeof msg.payload !== 'object') {\n        // Return default values if no valid data\n        var passMsg = { payload: false, topic: \"pass_status\" };\n        var ngMsg = { payload: false, topic: \"ng_status\" };\n        var statusMsg = { payload: \"⚠️ No data received from server\", topic: \"status\" };\n        var hpMsg = { payload: \"NO HP\", topic: \"hp_status\" };\n        \n        return [passMsg, ngMsg, statusMsg, hpMsg];\n    }\n    \n    var data = msg.payload;\n    \n    // Get HP status\n    var hp_status = data.hp_status || 'no_hp';\n    var hp_detected = data.hp_detected || false;\n    var defect_count = data.defect_count || 0;\n    \n    // Create PASS/NG status messages\n    var passStatus = (hp_status === 'pass');\n    var ngStatus = (hp_status === 'ng');\n    \n    var passMsg = {\n        payload: passStatus,\n        topic: \"pass_status\"\n    };\n    \n    var ngMsg = {\n        payload: ngStatus,\n        topic: \"ng_status\"\n    };\n    \n    // Create HP status text\n    var hpStatusText;\n    switch(hp_status) {\n        case 'pass':\n            hpStatusText = \"✅ PASS\";\n            break;\n        case 'ng':\n            hpStatusText = \"❌ NG\";\n            break;\n        case 'no_hp':\n            hpStatusText = \"⚪ NO HP\";\n            break;\n        default:\n            hpStatusText = \"❓ UNKNOWN\";\n    }\n    \n    var hpMsg = {\n        payload: hpStatusText,\n        topic: \"hp_status\"\n    };\n    \n    // Create enhanced status message\n    var fps = data.fps || 0;\n    var frameCount = data.frame_count || 0;\n    var status = data.status || 'unknown';\n    var timestamp = data.timestamp ? new Date(data.timestamp * 1000).toLocaleTimeString() : 'N/A';\n    \n    var statusMsg = {\n        payload: `🔍 Frame: ${frameCount} | HP: ${hp_detected ? 'Detected' : 'None'} | Defects: ${defect_count} | FPS: ${fps} | Time: ${timestamp}`,\n        topic: \"status\"\n    };\n    \n    // Log successful data processing\n    node.log(`HP Inspection: Status=${hp_status}, HP Detected=${hp_detected}, Defects=${defect_count}, Frame=${frameCount}`);\n    \n    return [passMsg, ngMsg, statusMsg, hpMsg];\n    \n} catch (e) {\n    // Enhanced error handling\n    node.error(\"HP inspection data processing error: \" + e.message, msg);\n    \n    var passMsg = { payload: false, topic: \"pass_status\" };\n    var ngMsg = { payload: false, topic: \"ng_status\" };\n    var statusMsg = { payload: `❌ Processing error: ${e.message}`, topic: \"status\" };\n    var hpMsg = { payload: \"❌ ERROR\", topic: \"hp_status\" };\n    \n    return [passMsg, ngMsg, statusMsg, hpMsg];\n}",
+        "outputs": 4,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 650,
+        "y": 380,
+        "wires": [
+            [
+                "acdef0470a6d1f33"
+            ],
+            [
+                "a5d02282ba74220f"
+            ],
+            [
+                "82c9a9e13ac5ba1c"
+            ],
+            [
+                "059d8e11376d598d"
+            ]
+        ]
+    },
+    {
+        "id": "acdef0470a6d1f33",
+        "type": "ui_led",
+        "z": "58e559bc26ac85af",
+        "order": 1,
+        "group": "2170abea9abd278e",
+        "width": 3,
+        "height": 3,
+        "label": "PASS",
+        "labelPlacement": "bottom",
+        "labelAlignment": "center",
+        "colorForValue": [
+            {
+                "color": "#gray",
+                "value": "false",
+                "valueType": "bool"
+            },
+            {
+                "color": "#00ff00",
+                "value": "true",
+                "valueType": "bool"
+            }
+        ],
+        "allowColorForValueInMessage": false,
+        "shape": "circle",
+        "showGlow": true,
+        "name": "PASS Indicator",
+        "x": 920,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "a5d02282ba74220f",
+        "type": "ui_led",
+        "z": "58e559bc26ac85af",
+        "order": 2,
+        "group": "2170abea9abd278e",
+        "width": 3,
+        "height": 3,
+        "label": "NG",
+        "labelPlacement": "bottom",
+        "labelAlignment": "center",
+        "colorForValue": [
+            {
+                "color": "#gray",
+                "value": "false",
+                "valueType": "bool"
+            },
+            {
+                "color": "#ff0000",
+                "value": "true",
+                "valueType": "bool"
+            }
+        ],
+        "allowColorForValueInMessage": false,
+        "shape": "circle",
+        "showGlow": true,
+        "name": "NG Indicator",
+        "x": 920,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "059d8e11376d598d",
+        "type": "ui_text",
+        "z": "58e559bc26ac85af",
+        "group": "2170abea9abd278e",
+        "order": 3,
+        "width": 6,
+        "height": 2,
+        "name": "HP Status",
+        "label": "Current Status:",
+        "format": "{{msg.payload}}",
+        "layout": "row-center",
+        "className": "",
+        "style": false,
+        "font": "font-size: 24px; font-weight: bold;",
+        "fontSize": 24,
+        "color": "#000000",
+        "x": 920,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "82c9a9e13ac5ba1c",
+        "type": "ui_text",
+        "z": "58e559bc26ac85af",
+        "group": "status_group",
+        "order": 1,
+        "width": 12,
+        "height": 1,
+        "name": "Server Status",
+        "label": "",
+        "format": "{{msg.payload}}",
+        "layout": "row-left",
+        "x": 920,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "dbc3c54118cdf61b",
+        "type": "inject",
+        "z": "58e559bc26ac85af",
+        "name": "🔴 Stop All",
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "topic": "",
+        "payload": "",
+        "payloadType": "str",
+        "x": 150,
+        "y": 160,
+        "wires": [
+            [
+                "cbcfe55e79dd02d3",
+                "052ef1846435f1e2"
+            ]
+        ]
+    },
+    {
+        "id": "cbcfe55e79dd02d3",
+        "type": "exec",
+        "z": "58e559bc26ac85af",
+        "command": "taskkill",
+        "addpay": false,
+        "append": "/F /IM python.exe",
+        "useSpawn": "false",
+        "timer": "",
+        "winHide": false,
+        "name": "Kill Python Server",
+        "x": 450,
+        "y": 200,
+        "wires": [
+            [
+                "a2d24ef48a44ecb8"
+            ],
+            [],
+            []
+        ]
+    },
+    {
+        "id": "052ef1846435f1e2",
+        "type": "function",
+        "z": "58e559bc26ac85af",
+        "name": "Clear Display",
+        "func": "msg.payload = `\n<div style=\"text-align: center; padding: 30px; background: #f8f9fa; border-radius: 15px; border: 2px dashed #dc3545;\">\n    <h3 style=\"color: #dc3545; margin-bottom: 15px;\">⏹️ HP Inspection Server Stopped</h3>\n    <p style=\"color: #6c757d;\">Click 'Start YOLO Server' to begin HP inspection</p>\n    <small style=\"color: #999;\">Make sure your camera is available and oppo.pt model exists</small>\n</div>\n`;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 490,
+        "y": 260,
+        "wires": [
+            [
+                "9337d0aee0cdf2bd"
+            ]
+        ]
+    },
+    {
+        "id": "a2d24ef48a44ecb8",
+        "type": "debug",
+        "z": "58e559bc26ac85af",
+        "name": "Stop Info",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 640,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "f6cc8763203190e5",
+        "type": "inject",
+        "z": "58e559bc26ac85af",
+        "name": "🔍 Test Server Connection",
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 170,
+        "y": 340,
+        "wires": [
+            [
+                "a0b94afac0485c2d"
+            ]
+        ]
+    },
+    {
+        "id": "a0b94afac0485c2d",
+        "type": "http request",
+        "z": "58e559bc26ac85af",
+        "name": "Test Server Status",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://127.0.0.1:8000/data",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 410,
+        "y": 440,
+        "wires": [
+            [
+                "06ba6ea3c09b497e"
+            ]
+        ]
+    },
+    {
+        "id": "06ba6ea3c09b497e",
+        "type": "debug",
+        "z": "58e559bc26ac85af",
+        "name": "Connection Test Result",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 710,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "video_group",
+        "type": "ui_group",
+        "name": "Live Video Stream",
+        "tab": "main_tab",
+        "order": 1,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "2170abea9abd278e",
+        "type": "ui_group",
+        "name": "HP Inspection Status",
+        "tab": "main_tab",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "status_group",
+        "type": "ui_group",
+        "name": "Detection Status",
+        "tab": "main_tab",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "main_tab",
+        "type": "ui_tab",
+        "name": "YOLO Live Detection",
+        "icon": "fa-video-camera",
+        "order": 1,
+        "disabled": false,
+        "hidden": false
+    }
+]
+
+# =====================
+# Script python
+# =====================
+import cv2
+import numpy as np
+from ultralytics import YOLO
+import json
+import time
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import sys
+import os
+from urllib.parse import urlparse
+import traceback
+
+class VideoStreamHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Disable default logging to reduce console spam
+        pass
+    
+    def do_OPTIONS(self):
+        """Handle preflight requests"""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+    
+    def do_GET(self):
+        parsed_path = urlparse(self.path)
+        
+        if parsed_path.path == '/video':
+            try:
+                self.send_response(200)
+                self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+                self.send_header('Cache-Control', 'no-cache')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                
+                while True:
+                    if hasattr(self.server, 'current_frame') and self.server.current_frame is not None:
+                        # Encode frame to JPEG
+                        success, buffer = cv2.imencode('.jpg', self.server.current_frame, 
+                                                     [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        
+                        if success:
+                            frame_data = buffer.tobytes()
+                            
+                            # Send multipart response
+                            self.wfile.write(b'--frame\r\n')
+                            self.send_header('Content-Type', 'image/jpeg')
+                            self.send_header('Content-Length', str(len(frame_data)))
+                            self.end_headers()
+                            self.wfile.write(frame_data)
+                            self.wfile.write(b'\r\n')
+                    
+                    time.sleep(0.033)  # ~30 FPS
+                    
+            except Exception as e:
+                print(f"Video stream error: {e}")
+                return
+        
+        elif parsed_path.path == '/data':
+            try:
+                print(f"[DEBUG] Data endpoint accessed at {time.strftime('%H:%M:%S')}")
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                
+                # Get current data or send default
+                if hasattr(self.server, 'current_data') and self.server.current_data:
+                    response_data = self.server.current_data.copy()
+                    print(f"[DEBUG] Sending data: Frame {response_data.get('frame_count', 0)}, HP Status: {response_data.get('hp_status', 'no_hp')}")
+                else:
+                    response_data = {
+                        'count': 0, 
+                        'detections': [],
+                        'timestamp': time.time(),
+                        'frame_count': 0,
+                        'status': 'no_data',
+                        'fps': 0,
+                        'hp_detected': False,
+                        'hp_status': 'no_hp',  # no_hp, pass, ng
+                        'defect_count': 0
+                    }
+                    print(f"[DEBUG] No server data available, sending default")
+                
+                # Ensure all fields exist
+                required_fields = ['count', 'detections', 'timestamp', 'frame_count', 'status', 'fps', 'hp_detected', 'hp_status', 'defect_count']
+                for field in required_fields:
+                    if field not in response_data:
+                        if field in ['count', 'frame_count', 'fps', 'defect_count']:
+                            response_data[field] = 0
+                        elif field in ['hp_detected']:
+                            response_data[field] = False
+                        elif field == 'hp_status':
+                            response_data[field] = 'no_hp'
+                        else:
+                            response_data[field] = []
+                
+                json_response = json.dumps(response_data, ensure_ascii=False)
+                self.wfile.write(json_response.encode('utf-8'))
+                print(f"[DEBUG] Data sent successfully: {len(json_response)} bytes")
+                
+            except Exception as e:
+                print(f"[ERROR] Data endpoint error: {e}")
+                print(f"[ERROR] Traceback: {traceback.format_exc()}")
+                
+                try:
+                    # Send error response
+                    error_response = {
+                        'count': 0, 
+                        'detections': [], 
+                        'error': str(e),
+                        'timestamp': time.time(),
+                        'frame_count': 0,
+                        'status': 'error',
+                        'fps': 0,
+                        'hp_detected': False,
+                        'hp_status': 'error',
+                        'defect_count': 0
+                    }
+                    
+                    json_error = json.dumps(error_response).encode('utf-8')
+                    self.wfile.write(json_error)
+                        
+                except Exception as send_error:
+                    print(f"[ERROR] Could not send error response: {send_error}")
+        else:
+            # 404 for other paths
+            self.send_response(404)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(b'404 - Not Found')
+
+class YOLOStreamer:
+    def __init__(self, model_path, port=8000):
+        print("🤖 Initializing YOLO Streamer...")
+        
+        # Load YOLO model
+        print("📦 Loading YOLO model...")
+        try:
+            self.model = YOLO(model_path)
+            print(f"✅ Model loaded successfully: {model_path}")
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            sys.exit(1)
+        
+        # Initialize camera
+        print("📹 Initializing camera...")
+        self.cap = cv2.VideoCapture(0)
+        
+        if not self.cap.isOpened():
+            print("❌ Error: Cannot open camera!")
+            sys.exit(1)
+            
+        # Set camera properties
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # Test camera
+        ret, test_frame = self.cap.read()
+        if not ret or test_frame is None:
+            print("❌ Error: Cannot read from camera!")
+            sys.exit(1)
+        
+        print(f"✅ Camera initialized: {test_frame.shape}")
+        
+        # Define HP detection box (center area of the frame)
+        self.frame_height, self.frame_width = test_frame.shape[:2]
+        box_width = int(self.frame_width * 0.6)  # 60% of frame width
+        box_height = int(self.frame_height * 0.6)  # 60% of frame height
+        self.hp_box = {
+            'x1': (self.frame_width - box_width) // 2,
+            'y1': (self.frame_height - box_height) // 2,
+            'x2': (self.frame_width + box_width) // 2,
+            'y2': (self.frame_height + box_height) // 2
+        }
+        print(f"📱 HP detection box: {self.hp_box}")
+        
+        # Initialize HTTP server
+        try:
+            self.server = HTTPServer(('127.0.0.1', port), VideoStreamHandler)
+            self.server.current_frame = test_frame
+            self.server.current_data = {
+                'count': 0, 
+                'detections': [],
+                'timestamp': time.time(),
+                'frame_count': 0,
+                'status': 'initialized',
+                'fps': 0,
+                'hp_detected': False,
+                'hp_status': 'no_hp',
+                'defect_count': 0
+            }
+            print(f"🌐 HTTP Server initialized on port {port}")
+        except Exception as e:
+            print(f"❌ Error initializing server: {e}")
+            sys.exit(1)
+        
+        self.running = True
+        self.frame_count = 0
+        self.fps_counter = 0
+        self.last_fps_time = time.time()
+        self.current_fps = 0
+        
+    def check_hp_in_box(self, frame):
+        """Check if there's an object (HP) in the detection box"""
+        # Simple method: check if there's significant change/activity in the box area
+        box_area = frame[self.hp_box['y1']:self.hp_box['y2'], 
+                        self.hp_box['x1']:self.hp_box['x2']]
+        
+        # Convert to grayscale for analysis
+        gray_box = cv2.cvtColor(box_area, cv2.COLOR_BGR2GRAY)
+        
+        # Calculate mean brightness - if significantly different from background, assume HP present
+        mean_brightness = np.mean(gray_box)
+        
+        # Simple heuristic: if mean brightness is within certain range, assume HP is present
+        # You can adjust these thresholds based on your lighting conditions
+        if 30 < mean_brightness < 200:  # Adjust these values based on your setup
+            return True
+        return False
+    
+    def process_video(self):
+        print("🎥 Starting video processing thread...")
+        
+        while self.running:
+            try:
+                ret, frame = self.cap.read()
+                if not ret or frame is None:
+                    print("⚠️ Warning: Cannot read frame, retrying...")
+                    time.sleep(0.1)
+                    continue
+                
+                self.frame_count += 1
+                
+                # Draw HP detection box first
+                cv2.rectangle(frame, 
+                            (self.hp_box['x1'], self.hp_box['y1']), 
+                            (self.hp_box['x2'], self.hp_box['y2']), 
+                            (255, 255, 255), 2)  # White box for HP detection area
+                
+                # Add HP detection box label
+                cv2.putText(frame, 'HP Detection Area', 
+                          (self.hp_box['x1'], self.hp_box['y1'] - 10), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # Check if HP is in the detection box
+                hp_detected = self.check_hp_in_box(frame)
+                
+                # Run YOLO detection
+                try:
+                    results = self.model(frame, conf=0.3, verbose=False)
+                    detections = []
+                    defect_count = 0
+                    
+                    # Process detections
+                    if results and len(results) > 0:
+                        for result in results:
+                            if result.boxes is not None and len(result.boxes) > 0:
+                                boxes = result.boxes
+                                for box in boxes:
+                                    # Get box coordinates and info
+                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                    conf = float(box.conf[0].cpu().numpy())
+                                    cls = int(box.cls[0].cpu().numpy())
+                                    
+                                    # Get class name
+                                    if cls < len(self.model.names):
+                                        class_name = self.model.names[cls]
+                                    else:
+                                        class_name = f"class_{cls}"
+                                    
+                                    # Count defects (assuming any detection is a defect)
+                                    defect_count += 1
+                                    
+                                    # Choose color based on confidence
+                                    if conf > 0.7:
+                                        color = (0, 0, 255)  # Red - high confidence defect
+                                    elif conf > 0.5:
+                                        color = (0, 165, 255)  # Orange - medium confidence  
+                                    else:
+                                        color = (0, 255, 255)  # Yellow - low confidence
+                                    
+                                    # Draw bounding box for defects
+                                    cv2.rectangle(frame, 
+                                                (int(x1), int(y1)), 
+                                                (int(x2), int(y2)), 
+                                                color, 2)
+                                    
+                                    # Prepare label
+                                    label = f'{class_name}: {conf:.2f}'
+                                    
+                                    # Draw label background
+                                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                                    cv2.rectangle(frame, 
+                                                (int(x1), int(y1) - 25), 
+                                                (int(x1) + label_size[0] + 10, int(y1)), 
+                                                color, -1)
+                                    
+                                    # Draw label text
+                                    cv2.putText(frame, label, 
+                                              (int(x1) + 5, int(y1) - 7), 
+                                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+                                              (255, 255, 255), 2)
+                                    
+                                    # Store detection data
+                                    detections.append({
+                                        'class': class_name,
+                                        'confidence': round(conf, 3),
+                                        'center': [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                                        'bbox': [int(x1), int(y1), int(x2), int(y2)]
+                                    })
+                    
+                    # Determine HP status
+                    if hp_detected:
+                        if defect_count > 0:
+                            hp_status = 'ng'  # HP detected with defects
+                            status_color = (0, 0, 255)  # Red
+                            status_text = 'NG'
+                        else:
+                            hp_status = 'pass'  # HP detected without defects
+                            status_color = (0, 255, 0)  # Green
+                            status_text = 'PASS'
+                    else:
+                        hp_status = 'no_hp'  # No HP detected
+                        status_color = (128, 128, 128)  # Gray
+                        status_text = 'NO HP'
+                    
+                    # Draw status indicator (large box)
+                    status_box_size = 120
+                    status_x = frame.shape[1] - status_box_size - 20
+                    status_y = 20
+                    
+                    # Draw status box
+                    cv2.rectangle(frame, 
+                                (status_x, status_y), 
+                                (status_x + status_box_size, status_y + 60), 
+                                status_color, -1)
+                    
+                    # Draw status text
+                    text_size = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
+                    text_x = status_x + (status_box_size - text_size[0]) // 2
+                    text_y = status_y + 40
+                    cv2.putText(frame, status_text, (text_x, text_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                    
+                    # Calculate FPS
+                    self.fps_counter += 1
+                    current_time = time.time()
+                    if current_time - self.last_fps_time >= 1.0:
+                        self.current_fps = round(self.fps_counter / (current_time - self.last_fps_time), 1)
+                        self.fps_counter = 0
+                        self.last_fps_time = current_time
+                    
+                    # Add info overlay
+                    info_text = f'Frame: {self.frame_count} | HP: {status_text} | Defects: {defect_count}'
+                    if self.current_fps > 0:
+                        info_text += f' | FPS: {self.current_fps}'
+                    
+                    # Draw info with background
+                    text_size = cv2.getTextSize(info_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                    cv2.rectangle(frame, (5, 5), (text_size[0] + 15, 35), (0, 0, 0), -1)
+                    cv2.putText(frame, info_text, (10, 25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    # Update server data - CRITICAL SECTION
+                    try:
+                        self.server.current_frame = frame.copy()
+                        self.server.current_data = {
+                            'count': len(detections),
+                            'detections': detections,
+                            'timestamp': time.time(),
+                            'frame_count': self.frame_count,
+                            'status': 'running',
+                            'fps': self.current_fps,
+                            'hp_detected': hp_detected,
+                            'hp_status': hp_status,
+                            'defect_count': defect_count
+                        }
+                        
+                        # Debug print every 50 frames
+                        if self.frame_count % 50 == 0:
+                            print(f"[DEBUG] Frame {self.frame_count}: HP={hp_detected}, Status={hp_status}, Defects={defect_count}, FPS={self.current_fps}")
+                            
+                    except Exception as update_error:
+                        print(f"[ERROR] Failed to update server data: {update_error}")
+                        
+                except Exception as detection_error:
+                    print(f"⚠️ Detection error: {detection_error}")
+                    # Use original frame if detection fails
+                    self.server.current_frame = frame
+                    self.server.current_data = {
+                        'count': 0,
+                        'detections': [],
+                        'timestamp': time.time(),
+                        'frame_count': self.frame_count,
+                        'status': 'detection_error',
+                        'error': str(detection_error),
+                        'fps': self.current_fps,
+                        'hp_detected': False,
+                        'hp_status': 'error',
+                        'defect_count': 0
+                    }
+                
+                # Small delay to prevent CPU overload
+                time.sleep(0.01)
+                
+            except Exception as e:
+                print(f"❌ Video processing error: {e}")
+                print(f"Traceback: {traceback.format_exc()}")
+                time.sleep(0.1)
+    
+    def start(self):
+        print("\n" + "="*50)
+        print("🚀 YOLO Real-time HP Inspection Server Starting...")
+        print("="*50)
+        
+        # Start video processing in separate thread
+        video_thread = threading.Thread(target=self.process_video, daemon=True)
+        video_thread.start()
+        
+        print(f"📹 Video stream: http://127.0.0.1:8000/video")
+        print(f"📊 Detection data: http://127.0.0.1:8000/data")
+        print(f"🎯 Model: oppo.pt")
+        print(f"📱 HP Detection Box: {self.hp_box}")
+        print(f"✅ Server is ready!")
+        print("\nPress Ctrl+C to stop the server")
+        print("="*50)
+        
+        try:
+            # Start HTTP server (this will block)
+            self.server.serve_forever()
+        except KeyboardInterrupt:
+            self.stop()
+        except Exception as e:
+            print(f"❌ Server error: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
+            self.stop()
+    
+    def stop(self):
+        print("\n🛑 Shutting down server...")
+        self.running = False
+        
+        if hasattr(self, 'cap') and self.cap:
+            self.cap.release()
+            print("✅ Camera released")
+            
+        if hasattr(self, 'server'):
+            self.server.shutdown()
+            self.server.server_close()
+            print("✅ HTTP server stopped")
+        
+        print("✅ Shutdown complete")
+
+def main():
+    # Configuration
+    MODEL_PATH = "C:\\Users\\Andreas\\oppo.pt"
+    PORT = 8000
+    
+    print("🎯 YOLO Real-time HP Inspection Server")
+    print(f"📁 Model path: {MODEL_PATH}")
+    
+    # Check if model exists
+    if not os.path.exists(MODEL_PATH):
+        print(f"❌ ERROR: Model file not found at {MODEL_PATH}")
+        print("Please make sure oppo.pt is in the correct location.")
+        return False
+    
+    try:
+        # Create and start streamer
+        streamer = YOLOStreamer(MODEL_PATH, PORT)
+        streamer.start()
+        return True
+        
+    except Exception as e:
+        print(f"❌ FATAL ERROR: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return False
+
+if __name__ == "__main__":
+    success = main()
+    sys.exit(0 if success else 1)
