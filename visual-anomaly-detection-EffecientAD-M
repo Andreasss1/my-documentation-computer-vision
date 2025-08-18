@@ -1,0 +1,128 @@
+# ===
+# Pengembangan Model
+# ===
+# Cell 1: Mount Google Drive (asumsi folder 'data' berisi foto normal *.jpg di My Drive/data/)
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Cell 2: Instal anomalib dan dependencies (PyTorch sudah ada di Colab, anomalib akan handle)
+!pip install anomalib
+
+# Cell 3: Download ImageNette dataset untuk train teacher (subset ImageNet, ~1.3GB)
+# Jika tidak ingin wget, download manual dari https://s3.amazonaws.com/fast-ai-imageclas/imagenette2.tgz dan upload/extract ke /content/datasets/imagenette2
+!wget https://s3.amazonaws.com/fast-ai-imageclas/imagenette2.tgz -O /content/imagenette2.tgz
+!tar -xzf /content/imagenette2.tgz -C /content/datasets/
+!mv /content/datasets/imagenette2 /content/datasets/imagenette  # Rename untuk match default
+!rm /content/imagenette2.tgz
+print("ImageNette siap di /content/datasets/imagenette")
+
+# Cell 4: Siapkan dataset custom (struktur MVTec-like untuk anomalib)
+import os
+import shutil
+
+source_dir = '/content/drive/MyDrive/data/'  # Folder data normal Anda
+dataset_dir = '/content/mvtec_ad/hp/'  # 'hp' untuk handphone
+
+# Buat struktur
+os.makedirs(os.path.join(dataset_dir, 'train/good'), exist_ok=True)
+
+# Copy semua gambar normal ke train/good
+for file in os.listdir(source_dir):
+    if file.endswith(('.jpg', '.png', '.jpeg')):
+        shutil.copy(os.path.join(source_dir, file), os.path.join(dataset_dir, 'train/good', file))
+
+print("Dataset siap di /content/mvtec_ad/hp/train/good")
+
+# Cell 5: Import dan setup anomalib
+from anomalib.data import Folder  # Gunakan Folder datamodule untuk custom dataset (mirip MVTec)
+from anomalib.models import EfficientAd
+from anomalib.engine import Engine
+from anomalib.data.utils import InputNormalizationMethod
+import torch
+
+# Definisi datamodule untuk custom folder (train only normal, test jika ada)
+datamodule = Folder(
+    root='/content/mvtec_ad/hp/',  # Root dataset
+    normal_dir='train/good',  # Folder normal
+    task="segmentation",  # Untuk anomaly map
+    train_batch_size=32,
+    eval_batch_size=32,
+    image_size=(256, 256),  # Resize ke 256 seperti EfficientAD
+    normalization=InputNormalizationMethod.MIN_MAX,  # Atau NONE jika custom
+)
+
+datamodule.setup()  # Prepare data
+
+# Cell 6: Inisialisasi model EfficientAD-M (medium)
+model = EfficientAd(
+    imagenet_dir="/content/datasets/imagenette/train",  # Path ke ImageNette train folder
+    model_size="m",  # Medium
+    lr=1e-4,
+    weight_decay=0.0,
+    padding="same",
+    pad_maps=True,
+)
+
+# Cell 7: Setup engine dan train
+engine = Engine(
+    max_epochs=100,  # Sesuaikan berdasarkan data (untuk sedikit data, 10-50 epochs cukup)
+    devices=1,  # GPU
+    accelerator="gpu",
+    logger=False,  # Atau True untuk TensorBoard
+    default_root_dir="/content/output/",  # Save model di sini
+)
+
+# Train model
+engine.fit(model=model, datamodule=datamodule)
+
+# Export model setelah train (opsional, untuk inference nanti)
+engine.export(model=model, export_path="/content/output/efficientad_m.pt")
+
+print("Training selesai. Model disimpan di /content/output/")
+
+# ===
+# Test data upload
+# ===
+# Cell 8: Inference untuk single image
+from google.colab import files
+from PIL import Image
+import torch
+import numpy as np
+
+# Load model dari training (atau exported)
+# model dan engine sudah ada dari cell sebelumnya
+
+# Fungsi predict
+def predict_anomaly(image_path):
+    # Preprocess image seperti datamodule
+    image = Image.open(image_path).convert('RGB')
+    transform = datamodule.transform  # Ambil dari datamodule
+    image_tensor = transform(image).unsqueeze(0).to('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Predict
+    outputs = model(image_tensor)
+    anomaly_map = outputs["anomaly_map"].cpu().numpy()  # Anomaly map
+    pred_score = outputs["pred_scores"].cpu().numpy()[0]  # Score
+
+    # Threshold: Anomalib hitung otomatis selama train dari valid data
+    # Jika tidak ada valid, manual: asumsikan threshold dari model.threshold
+    threshold = model.threshold if hasattr(model, 'threshold') else 0.5  # Ganti dengan nilai dari train logs jika perlu
+
+    label = 'NG (Anomaly)' if pred_score > threshold else 'Normal'
+    return pred_score, label, anomaly_map  # Map untuk visualisasi jika perlu
+
+# Upload dan test
+uploaded = files.upload()
+for filename in uploaded.keys():
+    score, label, _ = predict_anomaly(filename)
+    print(f"Gambar: {filename}, Anomaly Score: {score:.4f}, Hasil: {label}")
+
+# Untuk set threshold manual jika perlu: Predict pada beberapa normal, ambil max
+normal_scores = []
+normal_dir = '/content/mvtec_ad/hp/train/good/'
+for file in os.listdir(normal_dir)[:10]:
+    score, _, _ = predict_anomaly(os.path.join(normal_dir, file))
+    normal_scores.append(score)
+threshold = np.max(normal_scores) * 1.1
+print(f"Recommended Threshold: {threshold}")
+model.threshold = threshold  # Set jika perlu
