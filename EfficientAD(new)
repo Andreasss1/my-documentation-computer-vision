@@ -1,351 +1,603 @@
-import numpy as np
-import tifffile
-import torch
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
-from PIL import Image
-import argparse
-import itertools
+# Visual Anomaly Detection dengan Autoencoder + Heatmap Visualization
+# Struktur folder: data/train/normal/, data/test/defect/, data/test/normal/
+
 import os
-import random
-from tqdm import tqdm
-import glob
-from sklearn.metrics import roc_auc_score
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+from PIL import Image
+import zipfile
+import requests
+from io import BytesIO
+from scipy import ndimage
+import cv2
 
-# Implementasi sederhana untuk kelas-kelas yang diperlukan
-class ImageFolderCustom(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
-        self.transform = transform
-        self.images = []
+# ======================= SETUP DATA =======================
+
+def create_sample_dataset():
+    """Membuat dataset sample untuk testing"""
+    print("Membuat struktur folder...")
+    
+    # Buat struktur folder
+    os.makedirs('data/train/normal', exist_ok=True)
+    os.makedirs('data/test/normal', exist_ok=True)
+    os.makedirs('data/test/defect', exist_ok=True)
+    
+    # Generate gambar sample normal (kotak dengan variasi kecil)
+    def create_normal_image(idx):
+        img = np.ones((64, 64, 3)) * 0.8  # Background abu-abu
+        # Tambah kotak di tengah
+        img[20:44, 20:44] = [0.2, 0.3, 0.9]  # Kotak biru
+        # Tambah noise kecil
+        noise = np.random.normal(0, 0.05, img.shape)
+        img = np.clip(img + noise, 0, 1)
+        return (img * 255).astype(np.uint8)
+    
+    # Generate gambar sample defect (dengan anomali)
+    def create_defect_image(idx):
+        img = np.ones((64, 64, 3)) * 0.8  # Background abu-abu
+        img[20:44, 20:44] = [0.2, 0.3, 0.9]  # Kotak biru
         
-        # Ambil semua file gambar dari folder
-        extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff', '*.tif']
-        for ext in extensions:
-            self.images.extend(glob.glob(os.path.join(root_dir, ext)))
-            self.images.extend(glob.glob(os.path.join(root_dir, ext.upper())))
-    
-    def __len__(self):
-        return len(self.images)
-    
-    def __getitem__(self, idx):
-        img_path = self.images[idx]
-        image = Image.open(img_path).convert('RGB')
-        
-        if self.transform:
-            return self.transform(image)
-        return image
-
-class InfiniteDataloader:
-    def __init__(self, dataloader):
-        self.dataloader = dataloader
-        self.iterator = iter(self.dataloader)
-    
-    def __iter__(self):
-        return self
-    
-    def __next__(self):
-        try:
-            return next(self.iterator)
-        except StopIteration:
-            self.iterator = iter(self.dataloader)
-            return next(self.iterator)
-
-# Implementasi arsitektur PDN sederhana (lebih ringan untuk CPU)
-class PDN(torch.nn.Module):
-    def __init__(self, out_channels):
-        super(PDN, self).__init__()
-        self.feature_extractor = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 32, 3, padding=1),      # Kurangi channel
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(32, 64, 3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.MaxPool2d(2),
-            torch.nn.Conv2d(64, 128, 3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(128, out_channels, 3, padding=1),
-            torch.nn.ReLU()
-        )
-    
-    def forward(self, x):
-        return self.feature_extractor(x)
-
-# Implementasi Autoencoder sederhana (lebih ringan untuk CPU)
-class AutoEncoder(torch.nn.Module):
-    def __init__(self, out_channels):
-        super(AutoEncoder, self).__init__()
-        self.encoder = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 32, 3, padding=1),      # Kurangi channel
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(32, 64, 3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.MaxPool2d(2),
-            torch.nn.Conv2d(64, out_channels, 3, padding=1),
-            torch.nn.ReLU()
-        )
-        self.decoder = torch.nn.Sequential(
-            torch.nn.Conv2d(out_channels, 64, 3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-            torch.nn.Conv2d(64, 32, 3, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(32, out_channels, 3, padding=1),
-            torch.nn.ReLU()
-        )
-    
-    def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
-
-def get_argparse():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--data_path', default='data/train',
-                        help='Path to training data folder')
-    parser.add_argument('-o', '--output_dir', default='output/models')
-    parser.add_argument('-t', '--train_steps', type=int, default=10000)  # Kurangi untuk CPU
-    parser.add_argument('--image_size', type=int, default=128)  # Kurangi ukuran untuk CPU
-    parser.add_argument('--batch_size', type=int, default=2)   # Kurangi batch size untuk CPU
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
-    parser.add_argument('--num_workers', type=int, default=0)  # Tambahkan opsi num_workers
-    return parser.parse_args()
-
-# Constants
-seed = 42
-# Force CPU usage - lebih aman untuk memastikan
-on_gpu = False  # Set ke False untuk memastikan pakai CPU saja
-out_channels = 256  # Kurangi channel untuk CPU
-
-def train_transform(image, image_size):
-    """Transform untuk training dengan augmentasi"""
-    base_transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    
-    aug_transform = transforms.Compose([
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    
-    return base_transform(image), aug_transform(image)
-
-@torch.no_grad()
-def teacher_normalization(teacher, train_loader):
-    """Normalisasi teacher features"""
-    print("Computing teacher normalization...")
-    teacher.eval()
-    
-    mean_outputs = []
-    for batch in tqdm(train_loader, desc='Computing mean of features'):
-        if isinstance(batch, tuple):
-            train_image = batch[0]  # Jika ada augmented pair
+        # Tambah defect (spot merah, garis, dll)
+        if idx % 3 == 0:
+            # Red spot
+            img[15:25, 15:25] = [0.9, 0.1, 0.1]
+        elif idx % 3 == 1:
+            # White line
+            img[30, :] = [1.0, 1.0, 1.0]
         else:
-            train_image = batch
+            # Dark patch
+            img[40:55, 10:25] = [0.1, 0.1, 0.1]
             
-        # Semua tensor di CPU - tidak perlu .cuda()
-        teacher_output = teacher(train_image)
-        mean_output = torch.mean(teacher_output, dim=[0, 2, 3])
-        mean_outputs.append(mean_output)
+        # Tambah noise
+        noise = np.random.normal(0, 0.05, img.shape)
+        img = np.clip(img + noise, 0, 1)
+        return (img * 255).astype(np.uint8)
     
-    channel_mean = torch.mean(torch.stack(mean_outputs), dim=0)
-    channel_mean = channel_mean[None, :, None, None]
+    # Generate training normal images
+    print("Generating training normal images...")
+    for i in range(100):
+        img = create_normal_image(i)
+        Image.fromarray(img).save(f'data/train/normal/normal_{i:03d}.jpg')
+    
+    # Generate test normal images
+    print("Generating test normal images...")
+    for i in range(30):
+        img = create_normal_image(i + 100)
+        Image.fromarray(img).save(f'data/test/normal/normal_{i:03d}.jpg')
+    
+    # Generate test defect images
+    print("Generating test defect images...")
+    for i in range(30):
+        img = create_defect_image(i)
+        Image.fromarray(img).save(f'data/test/defect/defect_{i:03d}.jpg')
+    
+    print("Dataset sample berhasil dibuat!")
 
-    mean_distances = []
-    for batch in tqdm(train_loader, desc='Computing std of features'):
-        if isinstance(batch, tuple):
-            train_image = batch[0]
-        else:
-            train_image = batch
-            
-        # Semua tensor di CPU - tidak perlu .cuda()
-        teacher_output = teacher(train_image)
-        distance = (teacher_output - channel_mean) ** 2
-        mean_distance = torch.mean(distance, dim=[0, 2, 3])
-        mean_distances.append(mean_distance)
-    
-    channel_var = torch.mean(torch.stack(mean_distances), dim=0)
-    channel_var = channel_var[None, :, None, None]
-    channel_std = torch.sqrt(channel_var)
+# ======================= DATA LOADING =======================
 
-    return channel_mean, channel_std
+def load_images_from_folder(folder_path, target_size=(64, 64)):
+    """Load gambar dari folder"""
+    images = []
+    filenames = []
+    
+    if not os.path.exists(folder_path):
+        print(f"Folder {folder_path} tidak ditemukan!")
+        return np.array([]), []
+    
+    for filename in sorted(os.listdir(folder_path)):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            img_path = os.path.join(folder_path, filename)
+            try:
+                img = Image.open(img_path).convert('RGB')
+                img = img.resize(target_size)
+                img_array = np.array(img) / 255.0  # Normalize ke [0,1]
+                images.append(img_array)
+                filenames.append(filename)
+            except Exception as e:
+                print(f"Error loading {filename}: {e}")
+    
+    return np.array(images), filenames
 
-def main():
-    # Set random seeds
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    
-    # Parse arguments
-    config = get_argparse()
-    
-    print(f"Training on: CPU (Forced)")
-    print("INFO: All operations will run on CPU")
-    print("- Reduced image size to 128x128")
-    print("- Reduced batch size to 2") 
-    print("- Reduced training steps to 10,000")
-    print("- Reduced model complexity")
-    print(f"Data path: {config.data_path}")
-    print(f"Output directory: {config.output_dir}")
-    print(f"Training steps: {config.train_steps}")
-    
-    # Create output directory
-    os.makedirs(config.output_dir, exist_ok=True)
-    
-    # Load training data
+def load_data():
+    """Load semua data"""
     print("Loading training data...")
-    train_dataset = ImageFolderCustom(
-        config.data_path, 
-        transform=lambda x: train_transform(x, config.image_size)
+    train_normal, train_filenames = load_images_from_folder('data/train/normal')
+    
+    print("Loading test data...")
+    test_normal, test_normal_filenames = load_images_from_folder('data/test/normal')
+    test_defect, test_defect_filenames = load_images_from_folder('data/test/defect')
+    
+    print(f"Training normal: {len(train_normal)} images")
+    print(f"Test normal: {len(test_normal)} images")
+    print(f"Test defect: {len(test_defect)} images")
+    
+    return train_normal, test_normal, test_defect, test_normal_filenames, test_defect_filenames
+
+# ======================= MODEL AUTOENCODER =======================
+
+def build_autoencoder(input_shape=(64, 64, 3)):
+    """Membangun model autoencoder"""
+    
+    # Encoder
+    input_img = keras.Input(shape=input_shape)
+    
+    # Encoding layers
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(input_img)
+    x = layers.MaxPooling2D((2, 2), padding='same')(x)
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = layers.MaxPooling2D((2, 2), padding='same')(x)
+    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    encoded = layers.MaxPooling2D((2, 2), padding='same')(x)
+    
+    # Decoder
+    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(encoded)
+    x = layers.UpSampling2D((2, 2))(x)
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = layers.UpSampling2D((2, 2))(x)
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(x)
+    x = layers.UpSampling2D((2, 2))(x)
+    decoded = layers.Conv2D(3, (3, 3), activation='sigmoid', padding='same')(x)
+    
+    autoencoder = keras.Model(input_img, decoded)
+    autoencoder.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    
+    return autoencoder
+
+# ======================= TRAINING =======================
+
+def train_autoencoder(model, train_data, epochs=50, batch_size=16):
+    """Training autoencoder"""
+    print("Training autoencoder...")
+    
+    # Callback untuk early stopping
+    early_stopping = keras.callbacks.EarlyStopping(
+        monitor='loss', patience=10, restore_best_weights=True
     )
     
-    print(f"Found {len(train_dataset)} training images")
+    # Training
+    history = model.fit(
+        train_data, train_data,
+        epochs=epochs,
+        batch_size=batch_size,
+        shuffle=True,
+        validation_split=0.1,
+        callbacks=[early_stopping],
+        verbose=1
+    )
     
-    if len(train_dataset) == 0:
-        print("Error: No images found in the training directory!")
-        print(f"Please check if {config.data_path} contains image files")
+    return history
+
+# ======================= ANOMALY DETECTION =======================
+
+def calculate_reconstruction_error(model, images):
+    """Menghitung reconstruction error"""
+    reconstructed = model.predict(images)
+    mse = np.mean(np.square(images - reconstructed), axis=(1, 2, 3))
+    return mse, reconstructed
+
+def find_threshold(model, normal_data, percentile=95):
+    """Menentukan threshold untuk anomaly detection"""
+    errors, _ = calculate_reconstruction_error(model, normal_data)
+    threshold = np.percentile(errors, percentile)
+    return threshold
+
+# ======================= HEATMAP FUNCTIONS =======================
+
+def generate_anomaly_heatmap(original, reconstructed, method='mse'):
+    """
+    Generate heatmap untuk menunjukkan lokasi anomali
+    
+    Args:
+        original: Gambar asli (H, W, C)
+        reconstructed: Gambar rekonstruksi (H, W, C)
+        method: Metode perhitungan ('mse', 'mae', 'ssim')
+    
+    Returns:
+        heatmap: Array 2D menunjukkan intensitas anomali
+    """
+    if method == 'mse':
+        # Mean Squared Error per pixel
+        diff = np.square(original - reconstructed)
+        heatmap = np.mean(diff, axis=2)  # Average across color channels
+        
+    elif method == 'mae':
+        # Mean Absolute Error per pixel
+        diff = np.abs(original - reconstructed)
+        heatmap = np.mean(diff, axis=2)
+        
+    elif method == 'ssim':
+        # Structural Similarity Index (inverted for anomaly detection)
+        from skimage.metrics import structural_similarity as ssim
+        try:
+            _, ssim_map = ssim(original, reconstructed, full=True, multichannel=True)
+            heatmap = 1 - ssim_map  # Invert SSIM (low similarity = high anomaly)
+        except:
+            # Fallback to MSE if SSIM fails
+            diff = np.square(original - reconstructed)
+            heatmap = np.mean(diff, axis=2)
+    
+    # Smooth heatmap untuk hasil yang lebih baik
+    heatmap = ndimage.gaussian_filter(heatmap, sigma=1.0)
+    
+    # Normalize ke range [0, 1]
+    heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
+    
+    return heatmap
+
+def apply_heatmap_overlay(image, heatmap, alpha=0.4, colormap='jet'):
+    """
+    Menerapkan heatmap sebagai overlay pada gambar asli
+    
+    Args:
+        image: Gambar asli (H, W, C)
+        heatmap: Heatmap anomali (H, W)
+        alpha: Transparansi overlay
+        colormap: Colormap untuk heatmap
+    
+    Returns:
+        overlayed_image: Gambar dengan overlay heatmap
+    """
+    # Convert heatmap to color using colormap
+    cmap = plt.get_cmap(colormap)
+    heatmap_colored = cmap(heatmap)[:, :, :3]  # Remove alpha channel
+    
+    # Blend original image with heatmap
+    overlayed = (1 - alpha) * image + alpha * heatmap_colored
+    overlayed = np.clip(overlayed, 0, 1)
+    
+    return overlayed
+
+def visualize_heatmaps(model, images, titles, n_samples=5, methods=['mse', 'mae']):
+    """
+    Visualisasi heatmap anomali untuk multiple images dan methods
+    """
+    if len(images) == 0:
+        print("No images to visualize!")
         return
     
-    # Split data for validation (10% for validation)
-    train_size = int(0.9 * len(train_dataset))
-    val_size = len(train_dataset) - train_size
+    reconstructed_imgs = model.predict(images)
+    n_samples = min(n_samples, len(images))
+    n_methods = len(methods)
     
-    train_subset, val_subset = torch.utils.data.random_split(
-        train_dataset, [train_size, val_size], 
-        generator=torch.Generator().manual_seed(seed)
-    )
+    # Calculate overall reconstruction errors
+    errors, _ = calculate_reconstruction_error(model, images)
     
-    train_loader = DataLoader(
-        train_subset, batch_size=config.batch_size, 
-        shuffle=True, num_workers=config.num_workers, pin_memory=False  # Disable pin_memory untuk CPU
-    )
+    plt.figure(figsize=(20, 4 * n_methods + 2))
     
-    val_loader = DataLoader(
-        val_subset, batch_size=1, shuffle=False, num_workers=config.num_workers
-    )
-    
-    train_loader_infinite = InfiniteDataloader(train_loader)
-    
-    print(f"Training set: {len(train_subset)} images")
-    print(f"Validation set: {len(val_subset)} images")
-    
-    # Create models
-    print("Creating models...")
-    teacher = PDN(out_channels)
-    student = PDN(2 * out_channels)
-    autoencoder = AutoEncoder(out_channels)
-    
-    # Initialize teacher with random weights (dalam implementasi asli, teacher di-pretrain)
-    print("Initializing teacher model...")
-    teacher.eval()
-    student.train()
-    autoencoder.train()
-    
-    # Semua model di CPU - tidak perlu .cuda()
-    print("All models running on CPU")
-    
-    # Compute teacher normalization
-    teacher_mean, teacher_std = teacher_normalization(teacher, train_loader)
-    
-    # Setup optimizer
-    optimizer = torch.optim.Adam(
-        itertools.chain(student.parameters(), autoencoder.parameters()),
-        lr=config.learning_rate, weight_decay=1e-5
-    )
-    
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=int(0.95 * config.train_steps), gamma=0.1
-    )
-    
-    # Training loop
-    print("Starting training...")
-    teacher.eval()  # Teacher tetap dalam mode eval
-    
-    tqdm_obj = tqdm(range(config.train_steps))
-    for iteration in tqdm_obj:
-        try:
-            batch = next(train_loader_infinite)
-            if isinstance(batch, tuple) and len(batch) == 2:
-                image_st, image_ae = batch
-            else:
-                # Jika tidak ada augmented pair, gunakan image yang sama
-                image_st = image_ae = batch
-                
-            # Semua tensor di CPU - tidak perlu .cuda()
-            
-            # Teacher prediction (frozen)
-            with torch.no_grad():
-                teacher_output_st = teacher(image_st)
-                teacher_output_st = (teacher_output_st - teacher_mean) / teacher_std
-                teacher_output_ae = teacher(image_ae)
-                teacher_output_ae = (teacher_output_ae - teacher_mean) / teacher_std
-            
-            # Student predictions
-            student_output_st = student(image_st)[:, :out_channels]
-            student_output_ae = student(image_ae)[:, out_channels:]
-            
-            # Autoencoder prediction
-            ae_output = autoencoder(image_ae)
-            
-            # Compute losses
-            distance_st = (teacher_output_st - student_output_st) ** 2
-            d_hard = torch.quantile(distance_st, q=0.999)
-            loss_hard = torch.mean(distance_st[distance_st >= d_hard])
-            
-            distance_ae = (teacher_output_ae - ae_output) ** 2
-            loss_ae = torch.mean(distance_ae)
-            
-            distance_stae = (ae_output - student_output_ae) ** 2
-            loss_stae = torch.mean(distance_stae)
-            
-            loss_total = loss_hard + loss_ae + loss_stae
-            
-            # Backward pass
-            optimizer.zero_grad()
-            loss_total.backward()
-            optimizer.step()
-            scheduler.step()
-            
-            # Update progress
-            if iteration % 10 == 0:
-                tqdm_obj.set_description(f"Loss: {loss_total.item():.4f}")
-            
-            # Save intermediate models
-            if iteration % 5000 == 0 and iteration > 0:
-                torch.save(teacher.state_dict(), 
-                          os.path.join(config.output_dir, f'teacher_step_{iteration}.pth'))
-                torch.save(student.state_dict(), 
-                          os.path.join(config.output_dir, f'student_step_{iteration}.pth'))
-                torch.save(autoencoder.state_dict(), 
-                          os.path.join(config.output_dir, f'autoencoder_step_{iteration}.pth'))
-                print(f"\nSaved models at step {iteration}")
+    for i in range(n_samples):
+        # Original image
+        plt.subplot(n_methods + 2, n_samples, i + 1)
+        plt.imshow(images[i])
+        plt.title(f'Original\n{titles[i]}\nError: {errors[i]:.4f}')
+        plt.axis('off')
         
-        except Exception as e:
-            print(f"Error at iteration {iteration}: {str(e)}")
-            continue
+        # Reconstructed image
+        plt.subplot(n_methods + 2, n_samples, i + 1 + n_samples)
+        plt.imshow(reconstructed_imgs[i])
+        plt.title('Reconstructed')
+        plt.axis('off')
+        
+        # Heatmaps for each method
+        for j, method in enumerate(methods):
+            heatmap = generate_anomaly_heatmap(images[i], reconstructed_imgs[i], method=method)
+            
+            # Pure heatmap
+            plt.subplot(n_methods + 2, n_samples, i + 1 + (j + 2) * n_samples)
+            im = plt.imshow(heatmap, cmap='jet', vmin=0, vmax=1)
+            plt.title(f'Heatmap ({method.upper()})')
+            plt.axis('off')
+            plt.colorbar(im, ax=plt.gca(), fraction=0.046, pad=0.04)
     
-    # Save final models
-    print("Saving final models...")
-    torch.save(teacher.state_dict(), 
-              os.path.join(config.output_dir, 'teacher_final.pth'))
-    torch.save(student.state_dict(), 
-              os.path.join(config.output_dir, 'student_final.pth'))
-    torch.save(autoencoder.state_dict(), 
-              os.path.join(config.output_dir, 'autoencoder_final.pth'))
-    
-    # Save normalization parameters
-    torch.save({
-        'teacher_mean': teacher_mean,
-        'teacher_std': teacher_std,
-        'out_channels': out_channels,
-        'image_size': config.image_size
-    }, os.path.join(config.output_dir, 'normalization_params.pth'))
-    
-    print("Training completed!")
-    print(f"Models saved in: {config.output_dir}")
+    plt.tight_layout()
+    plt.show()
 
-if __name__ == '__main__':
+def visualize_heatmap_overlays(model, images, titles, n_samples=5, method='mse', alpha=0.4):
+    """
+    Visualisasi overlay heatmap pada gambar asli
+    """
+    if len(images) == 0:
+        print("No images to visualize!")
+        return
+    
+    reconstructed_imgs = model.predict(images)
+    n_samples = min(n_samples, len(images))
+    
+    # Calculate reconstruction errors
+    errors, _ = calculate_reconstruction_error(model, images)
+    
+    plt.figure(figsize=(20, 8))
+    
+    for i in range(n_samples):
+        # Original
+        plt.subplot(2, n_samples, i + 1)
+        plt.imshow(images[i])
+        plt.title(f'Original\n{titles[i]}\nError: {errors[i]:.4f}')
+        plt.axis('off')
+        
+        # Heatmap overlay
+        plt.subplot(2, n_samples, i + 1 + n_samples)
+        heatmap = generate_anomaly_heatmap(images[i], reconstructed_imgs[i], method=method)
+        overlay = apply_heatmap_overlay(images[i], heatmap, alpha=alpha)
+        plt.imshow(overlay)
+        plt.title(f'Anomaly Heatmap Overlay\n(Method: {method.upper()})')
+        plt.axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+
+def create_detailed_anomaly_report(model, images, titles, threshold, method='mse'):
+    """
+    Membuat laporan detail anomali dengan heatmap dan statistik
+    """
+    if len(images) == 0:
+        print("No images to analyze!")
+        return
+    
+    reconstructed_imgs = model.predict(images)
+    errors, _ = calculate_reconstruction_error(model, images)
+    
+    print(f"\n=== DETAILED ANOMALY REPORT ===")
+    print(f"Method: {method.upper()}")
+    print(f"Threshold: {threshold:.4f}")
+    print(f"Total images analyzed: {len(images)}")
+    
+    anomaly_count = 0
+    anomaly_details = []
+    
+    for i in range(len(images)):
+        is_anomaly = errors[i] > threshold
+        heatmap = generate_anomaly_heatmap(images[i], reconstructed_imgs[i], method=method)
+        
+        # Calculate anomaly statistics
+        anomaly_intensity = np.mean(heatmap)
+        max_anomaly_intensity = np.max(heatmap)
+        anomaly_area = np.sum(heatmap > 0.5) / (heatmap.shape[0] * heatmap.shape[1])
+        
+        detail = {
+            'filename': titles[i],
+            'error': errors[i],
+            'is_anomaly': is_anomaly,
+            'anomaly_intensity': anomaly_intensity,
+            'max_anomaly_intensity': max_anomaly_intensity,
+            'anomaly_area_ratio': anomaly_area
+        }
+        anomaly_details.append(detail)
+        
+        if is_anomaly:
+            anomaly_count += 1
+            print(f"\n{titles[i]}:")
+            print(f"  - Error: {errors[i]:.4f} (ANOMALY)")
+            print(f"  - Anomaly Intensity (avg): {anomaly_intensity:.4f}")
+            print(f"  - Max Anomaly Intensity: {max_anomaly_intensity:.4f}")
+            print(f"  - Anomaly Area Ratio: {anomaly_area:.2%}")
+        else:
+            print(f"\n{titles[i]}: Error: {errors[i]:.4f} (NORMAL)")
+    
+    print(f"\n=== SUMMARY ===")
+    print(f"Anomalies detected: {anomaly_count}/{len(images)} ({anomaly_count/len(images):.1%})")
+    
+    return anomaly_details
+
+# ======================= VISUALISASI (Updated) =======================
+
+def plot_training_history(history):
+    """Plot training history"""
+    plt.figure(figsize=(12, 4))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['loss'], label='Training Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+    plt.title('Model Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['mae'], label='Training MAE')
+    plt.plot(history.history['val_mae'], label='Validation MAE')
+    plt.title('Model MAE')
+    plt.xlabel('Epoch')
+    plt.ylabel('MAE')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
+def visualize_reconstructions(model, images, titles, n_samples=5):
+    """Visualisasi original vs reconstructed images"""
+    if len(images) == 0:
+        print("No images to visualize!")
+        return
+        
+    reconstructed, _ = calculate_reconstruction_error(model, images)
+    reconstructed_imgs = model.predict(images)
+    
+    n_samples = min(n_samples, len(images))
+    
+    plt.figure(figsize=(15, 6))
+    for i in range(n_samples):
+        # Original
+        plt.subplot(3, n_samples, i + 1)
+        plt.imshow(images[i])
+        plt.title(f'Original\n{titles[i]}')
+        plt.axis('off')
+        
+        # Reconstructed
+        plt.subplot(3, n_samples, i + 1 + n_samples)
+        plt.imshow(reconstructed_imgs[i])
+        plt.title(f'Reconstructed')
+        plt.axis('off')
+        
+        # Difference
+        plt.subplot(3, n_samples, i + 1 + 2*n_samples)
+        diff = np.abs(images[i] - reconstructed_imgs[i])
+        plt.imshow(diff, cmap='hot')
+        plt.title(f'Difference\nError: {reconstructed[i]:.4f}')
+        plt.axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+
+def plot_error_distribution(normal_errors, defect_errors, threshold):
+    """Plot distribusi error"""
+    plt.figure(figsize=(10, 6))
+    
+    plt.hist(normal_errors, bins=30, alpha=0.7, label='Normal', color='blue')
+    plt.hist(defect_errors, bins=30, alpha=0.7, label='Defect', color='red')
+    plt.axvline(threshold, color='green', linestyle='--', linewidth=2, 
+                label=f'Threshold: {threshold:.4f}')
+    
+    plt.xlabel('Reconstruction Error')
+    plt.ylabel('Frequency')
+    plt.title('Distribution of Reconstruction Errors')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+def plot_confusion_matrix(y_true, y_pred, labels=['Normal', 'Defect']):
+    """Plot confusion matrix"""
+    cm = confusion_matrix(y_true, y_pred)
+    
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=labels, yticklabels=labels)
+    plt.title('Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.show()
+
+def evaluate_model(model, test_normal, test_defect, threshold):
+    """Evaluasi model"""
+    # Hitung errors
+    normal_errors, _ = calculate_reconstruction_error(model, test_normal)
+    defect_errors, _ = calculate_reconstruction_error(model, test_defect)
+    
+    # Prediksi
+    normal_pred = (normal_errors > threshold).astype(int)  # 0 = normal, 1 = anomaly
+    defect_pred = (defect_errors > threshold).astype(int)
+    
+    # Ground truth
+    y_true = np.concatenate([np.zeros(len(test_normal)), np.ones(len(test_defect))])
+    y_pred = np.concatenate([normal_pred, defect_pred])
+    
+    # Print classification report
+    print("\n=== EVALUATION RESULTS ===")
+    print(f"Threshold: {threshold:.4f}")
+    print(f"Normal images classified as anomaly: {np.sum(normal_pred)}/{len(normal_pred)}")
+    print(f"Defect images classified as anomaly: {np.sum(defect_pred)}/{len(defect_pred)}")
+    
+    print("\nClassification Report:")
+    print(classification_report(y_true, y_pred, target_names=['Normal', 'Defect']))
+    
+    # Plot confusion matrix
+    plot_confusion_matrix(y_true, y_pred)
+    
+    # Plot error distribution
+    plot_error_distribution(normal_errors, defect_errors, threshold)
+    
+    return normal_errors, defect_errors
+
+# ======================= MAIN EXECUTION (Updated) =======================
+
+def main():
+    """Fungsi utama"""
+    print("=== VISUAL ANOMALY DETECTION dengan HEATMAP ===\n")
+    
+    # 1. Create sample dataset (jika belum ada)
+    if not os.path.exists('data'):
+        create_sample_dataset()
+    
+    # 2. Load data
+    train_normal, test_normal, test_defect, test_normal_names, test_defect_names = load_data()
+    
+    if len(train_normal) == 0:
+        print("Tidak ada data training! Pastikan struktur folder benar.")
+        return
+    
+    # 3. Build dan train model
+    print("\n=== BUILDING MODEL ===")
+    model = build_autoencoder()
+    model.summary()
+    
+    print("\n=== TRAINING ===")
+    history = train_autoencoder(model, train_normal, epochs=30)
+    plot_training_history(history)
+    
+    # 4. Tentukan threshold
+    print("\n=== DETERMINING THRESHOLD ===")
+    threshold = find_threshold(model, train_normal, percentile=95)
+    print(f"Threshold determined: {threshold:.4f}")
+    
+    # 5. Visualisasi reconstruction (original)
+    print("\n=== VISUALIZING RECONSTRUCTIONS ===")
+    if len(test_normal) > 0:
+        print("Normal test images:")
+        visualize_reconstructions(model, test_normal, test_normal_names)
+    
+    if len(test_defect) > 0:
+        print("Defect test images:")
+        visualize_reconstructions(model, test_defect, test_defect_names)
+    
+    # 6. VISUALISASI HEATMAP (NEW!)
+    print("\n=== VISUALIZING ANOMALY HEATMAPS ===")
+    
+    if len(test_normal) > 0:
+        print("\n--- Normal Test Images - Heatmaps ---")
+        visualize_heatmaps(model, test_normal, test_normal_names, 
+                          n_samples=min(5, len(test_normal)), methods=['mse', 'mae'])
+        
+        print("\n--- Normal Test Images - Heatmap Overlays ---")
+        visualize_heatmap_overlays(model, test_normal, test_normal_names, 
+                                  n_samples=min(5, len(test_normal)), method='mse')
+    
+    if len(test_defect) > 0:
+        print("\n--- Defect Test Images - Heatmaps ---")
+        visualize_heatmaps(model, test_defect, test_defect_names, 
+                          n_samples=min(5, len(test_defect)), methods=['mse', 'mae'])
+        
+        print("\n--- Defect Test Images - Heatmap Overlays ---")
+        visualize_heatmap_overlays(model, test_defect, test_defect_names, 
+                                  n_samples=min(5, len(test_defect)), method='mse')
+    
+    # 7. DETAILED ANOMALY REPORTS (NEW!)
+    print("\n=== DETAILED ANOMALY ANALYSIS ===")
+    
+    if len(test_normal) > 0:
+        print("\n--- Analyzing Normal Test Images ---")
+        normal_report = create_detailed_anomaly_report(model, test_normal, 
+                                                      test_normal_names, threshold, method='mse')
+    
+    if len(test_defect) > 0:
+        print("\n--- Analyzing Defect Test Images ---")
+        defect_report = create_detailed_anomaly_report(model, test_defect, 
+                                                      test_defect_names, threshold, method='mse')
+    
+    # 8. Evaluasi model (original)
+    print("\n=== EVALUATION ===")
+    if len(test_normal) > 0 and len(test_defect) > 0:
+        normal_errors, defect_errors = evaluate_model(model, test_normal, test_defect, threshold)
+    else:
+        print("Tidak cukup data test untuk evaluasi!")
+    
+    # 9. Save model
+    print("\n=== SAVING MODEL ===")
+    model.save('anomaly_detection_model.h5')
+    print("Model saved as 'anomaly_detection_model.h5'")
+    
+    print("\n=== SELESAI ===")
+    print("Anomaly detection dengan heatmap visualization berhasil dijalankan!")
+    print("\nFitur baru yang ditambahkan:")
+    print("1. Heatmap visualization untuk menunjukkan lokasi anomali")
+    print("2. Multiple methods (MSE, MAE) untuk heatmap generation")
+    print("3. Overlay heatmap pada gambar asli")
+    print("4. Detailed anomaly reports dengan statistik")
+
+# ======================= RUN =======================
+
+if __name__ == "__main__":
     main()
