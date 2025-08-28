@@ -1,0 +1,3 @@
+Saya membuat code visual anomaly detection dengan pathcore dan menyimpan modelnya:
+
+Dengan code tersebut, buatkan code untuk diimplementasikan real-time dengan camera dengan memasukan model yang sudah di simpan dengan .pkl atau lainnya, jadi menampilkan heatmap nya, layaknya bounding box dengan model YOLO
