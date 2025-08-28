@@ -1,0 +1,472 @@
+# ===== BAGIAN 1: SAVING MODEL PATCHCORE =====
+
+import pickle
+import joblib
+import json
+import torch
+import numpy as np
+from datetime import datetime
+import os
+
+# Tambahkan ini setelah model selesai di-fit dan di-evaluate
+def save_patchcore_model(model, save_dir='./saved_models'):
+    """
+    Simpan model PatchCore dalam berbagai format untuk deployment
+    """
+    # Buat direktori jika belum ada
+    os.makedirs(save_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    print("Saving PatchCore model...")
+    
+    # 1. Simpan memory bank dan komponen utama (pickle format)
+    model_dict = {
+        'memory_bank': model.memory_bank,
+        'dimension_reducer': model.dimension_reducer,
+        'backbone_name': model.backbone_name,
+        'layers': model.layers,
+        'input_size': model.input_size,
+        'patch_size': model.patch_size,
+        'stride': model.stride,
+        'target_embed_dimension': model.target_embed_dimension,
+        'optimal_threshold': optimal_threshold,  # dari hasil evaluasi
+        'timestamp': timestamp
+    }
+    
+    # Simpan dalam format pickle (recommended untuk Python)
+    pickle_path = os.path.join(save_dir, f'patchcore_model_{timestamp}.pkl')
+    with open(pickle_path, 'wb') as f:
+        pickle.dump(model_dict, f)
+    print(f"✓ Model saved as pickle: {pickle_path}")
+    
+    # 2. Simpan dalam format joblib (lebih efisien untuk numpy arrays)
+    joblib_path = os.path.join(save_dir, f'patchcore_model_{timestamp}.joblib')
+    joblib.dump(model_dict, joblib_path)
+    print(f"✓ Model saved as joblib: {joblib_path}")
+    
+    # 3. Simpan metadata dalam JSON
+    metadata = {
+        'model_type': 'PatchCore',
+        'backbone': model.backbone_name,
+        'layers': model.layers,
+        'input_size': model.input_size,
+        'memory_bank_size': model.memory_bank.shape if model.memory_bank is not None else None,
+        'feature_dimension': model.memory_bank.shape[1] if model.memory_bank is not None else None,
+        'optimal_threshold': float(optimal_threshold),
+        'auc_score': float(auc_score),
+        'accuracy': float(accuracy),
+        'timestamp': timestamp,
+        'total_train_samples': len(train_dataset),
+        'total_test_samples': len(test_dataset)
+    }
+    
+    json_path = os.path.join(save_dir, f'patchcore_metadata_{timestamp}.json')
+    with open(json_path, 'w') as f:
+        json.dump(metadata, f, indent=4)
+    print(f"✓ Metadata saved as JSON: {json_path}")
+    
+    # 4. Simpan memory bank terpisah dalam format numpy (untuk deployment ringan)
+    if model.memory_bank is not None:
+        np_path = os.path.join(save_dir, f'memory_bank_{timestamp}.npy')
+        np.save(np_path, model.memory_bank)
+        print(f"✓ Memory bank saved as numpy: {np_path}")
+    
+    # 5. Simpan feature extractor state dict (PyTorch format)
+    torch_path = os.path.join(save_dir, f'feature_extractor_{timestamp}.pth')
+    torch.save({
+        'state_dict': model.feature_extractor.state_dict(),
+        'backbone_name': model.backbone_name,
+        'layers': model.layers
+    }, torch_path)
+    print(f"✓ Feature extractor saved as PyTorch: {torch_path}")
+    
+    print(f"\n🎉 Model successfully saved in {save_dir}")
+    return {
+        'pickle_path': pickle_path,
+        'joblib_path': joblib_path,
+        'json_path': json_path,
+        'numpy_path': np_path if model.memory_bank is not None else None,
+        'torch_path': torch_path
+    }
+
+# Simpan model setelah training dan evaluasi selesai
+saved_paths = save_patchcore_model(model)
+
+# ===== BAGIAN 2: LOADING MODEL FUNCTION =====
+
+def load_patchcore_model(model_path, device='cuda'):
+    """
+    Load model PatchCore dari file yang disimpan
+    """
+    print(f"Loading PatchCore model from: {model_path}")
+    
+    # Load model dictionary
+    if model_path.endswith('.pkl'):
+        with open(model_path, 'rb') as f:
+            model_dict = pickle.load(f)
+    elif model_path.endswith('.joblib'):
+        model_dict = joblib.load(model_path)
+    else:
+        raise ValueError("Model file must be .pkl or .joblib format")
+    
+    # Recreate PatchCore instance
+    model = PatchCore(
+        backbone=model_dict['backbone_name'],
+        layers=model_dict['layers'],
+        input_size=model_dict['input_size'],
+        patch_size=model_dict['patch_size'],
+        stride=model_dict['stride']
+    )
+    
+    # Restore saved components
+    model.memory_bank = model_dict['memory_bank']
+    model.dimension_reducer = model_dict['dimension_reducer']
+    model.target_embed_dimension = model_dict['target_embed_dimension']
+    
+    # Rebuild nearest neighbor searcher
+    if model.memory_bank is not None:
+        from sklearn.neighbors import NearestNeighbors
+        model.nn_searcher = NearestNeighbors(n_neighbors=1, metric='euclidean')
+        model.nn_searcher.fit(model.memory_bank)
+    
+    optimal_threshold = model_dict['optimal_threshold']
+    
+    print("✓ Model loaded successfully!")
+    return model, optimal_threshold
+
+# ===== BAGIAN 3: REAL-TIME CAMERA IMPLEMENTATION =====
+
+import cv2
+import threading
+import queue
+import time
+from collections import deque
+
+class RealtimePatchCore:
+    """
+    Real-time PatchCore anomaly detection dengan camera
+    """
+    def __init__(self, model, threshold, input_size=224, fps_limit=10):
+        self.model = model
+        self.threshold = threshold
+        self.input_size = input_size
+        self.fps_limit = fps_limit
+        
+        # Camera dan processing
+        self.cap = None
+        self.frame_queue = queue.Queue(maxsize=2)
+        self.result_queue = queue.Queue(maxsize=2)
+        self.processing_thread = None
+        self.is_running = False
+        
+        # FPS tracking
+        self.fps_counter = deque(maxlen=30)
+        self.last_time = time.time()
+        
+        # Transform untuk preprocessing
+        self.transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((input_size, input_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+    def start_camera(self, camera_id=0):
+        """Start camera capture"""
+        self.cap = cv2.VideoCapture(camera_id)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Cannot open camera {camera_id}")
+        
+        print(f"✓ Camera {camera_id} started")
+        
+    def preprocess_frame(self, frame):
+        """Preprocess frame untuk model"""
+        # Convert BGR to RGB
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Apply transforms
+        tensor = self.transform(frame_rgb).unsqueeze(0)
+        
+        return tensor.to(self.model.device)
+    
+    def process_frame(self, frame_tensor):
+        """Process single frame untuk anomaly detection"""
+        with torch.no_grad():
+            # Extract features
+            features = self.model.feature_extractor(frame_tensor)
+            embeddings = self.model._embed_features(features)
+            
+            # Apply dimension reduction if available
+            if self.model.dimension_reducer is not None:
+                embeddings_np = embeddings.cpu().numpy()
+                embeddings_np = self.model.dimension_reducer.transform(embeddings_np)
+            else:
+                embeddings_np = embeddings.cpu().numpy()
+            
+            # Compute distances to nearest neighbors
+            distances, _ = self.model.nn_searcher.kneighbors(embeddings_np)
+            
+            # Reshape to spatial dimensions
+            spatial_size = int(np.sqrt(embeddings_np.shape[0]))
+            score_map = distances[:, 0].reshape(spatial_size, spatial_size)
+            
+            # Resize to original size
+            score_map_resized = cv2.resize(score_map, (self.input_size, self.input_size))
+            
+            # Overall anomaly score
+            anomaly_score = np.max(score_map_resized)
+            is_anomaly = anomaly_score > self.threshold
+            
+            return anomaly_score, score_map_resized, is_anomaly
+    
+    def processing_worker(self):
+        """Worker thread untuk processing frames"""
+        while self.is_running:
+            try:
+                # Get frame from queue
+                frame = self.frame_queue.get(timeout=0.1)
+                
+                # Preprocess
+                frame_tensor = self.preprocess_frame(frame)
+                
+                # Process
+                score, heatmap, is_anomaly = self.process_frame(frame_tensor)
+                
+                # Put result
+                if not self.result_queue.full():
+                    self.result_queue.put((score, heatmap, is_anomaly))
+                
+                self.frame_queue.task_done()
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Processing error: {e}")
+    
+    def create_overlay(self, frame, heatmap, score, is_anomaly):
+        """Create visualization overlay"""
+        height, width = frame.shape[:2]
+        
+        # Resize heatmap to match frame
+        heatmap_resized = cv2.resize(heatmap, (width, height))
+        
+        # Normalize heatmap
+        heatmap_norm = (heatmap_resized - heatmap_resized.min()) / (heatmap_resized.max() - heatmap_resized.min() + 1e-8)
+        
+        # Apply colormap
+        heatmap_colored = cv2.applyColorMap((heatmap_norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
+        
+        # Blend with original frame
+        overlay = cv2.addWeighted(frame, 0.7, heatmap_colored, 0.3, 0)
+        
+        # Add text information
+        status_text = "ANOMALY DETECTED!" if is_anomaly else "Normal"
+        status_color = (0, 0, 255) if is_anomaly else (0, 255, 0)
+        
+        cv2.putText(overlay, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, status_color, 2)
+        cv2.putText(overlay, f"Score: {score:.4f}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(overlay, f"Threshold: {self.threshold:.4f}", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # FPS
+        current_time = time.time()
+        fps = 1.0 / (current_time - self.last_time + 1e-6)
+        self.fps_counter.append(fps)
+        avg_fps = np.mean(self.fps_counter)
+        cv2.putText(overlay, f"FPS: {avg_fps:.1f}", (width-120, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        self.last_time = current_time
+        
+        return overlay
+    
+    def run_realtime(self):
+        """Run real-time anomaly detection"""
+        self.is_running = True
+        
+        # Start processing thread
+        self.processing_thread = threading.Thread(target=self.processing_worker)
+        self.processing_thread.daemon = True
+        self.processing_thread.start()
+        
+        print("🚀 Starting real-time anomaly detection...")
+        print("Press 'q' to quit, 's' to save screenshot, 'r' to reset")
+        
+        last_process_time = time.time()
+        current_score = 0.0
+        current_heatmap = None
+        current_anomaly = False
+        
+        try:
+            while self.is_running:
+                # Capture frame
+                ret, frame = self.cap.read()
+                if not ret:
+                    print("Failed to capture frame")
+                    break
+                
+                # Control processing FPS
+                current_time = time.time()
+                if current_time - last_process_time > 1.0/self.fps_limit:
+                    # Add frame to processing queue
+                    if not self.frame_queue.full():
+                        self.frame_queue.put(frame.copy())
+                    last_process_time = current_time
+                
+                # Get latest result
+                try:
+                    score, heatmap, is_anomaly = self.result_queue.get_nowait()
+                    current_score = score
+                    current_heatmap = heatmap
+                    current_anomaly = is_anomaly
+                except queue.Empty:
+                    pass
+                
+                # Create visualization
+                if current_heatmap is not None:
+                    display_frame = self.create_overlay(frame, current_heatmap, current_score, current_anomaly)
+                else:
+                    display_frame = frame.copy()
+                    cv2.putText(display_frame, "Processing...", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                
+                # Show frame
+                cv2.imshow('PatchCore Real-time Anomaly Detection', display_frame)
+                
+                # Handle keyboard input
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                elif key == ord('s'):
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f'anomaly_screenshot_{timestamp}.jpg'
+                    cv2.imwrite(filename, display_frame)
+                    print(f"Screenshot saved: {filename}")
+                elif key == ord('r'):
+                    print("Reset detection...")
+                    # Clear queues
+                    while not self.result_queue.empty():
+                        self.result_queue.get()
+        
+        except KeyboardInterrupt:
+            print("\nInterrupted by user")
+        
+        finally:
+            self.stop()
+    
+    def stop(self):
+        """Stop real-time detection"""
+        print("Stopping real-time detection...")
+        self.is_running = False
+        
+        if self.processing_thread and self.processing_thread.is_alive():
+            self.processing_thread.join(timeout=2)
+        
+        if self.cap:
+            self.cap.release()
+        
+        cv2.destroyAllWindows()
+        print("✓ Stopped successfully")
+
+# ===== BAGIAN 4: EXAMPLE USAGE =====
+
+# Contoh penggunaan untuk load model dan run real-time
+def run_realtime_demo(model_path):
+    """
+    Demo real-time anomaly detection
+    """
+    try:
+        # Load model
+        model, threshold = load_patchcore_model(model_path)
+        
+        # Create real-time detector
+        detector = RealtimePatchCore(model, threshold, input_size=224, fps_limit=10)
+        
+        # Start camera
+        detector.start_camera(camera_id=0)  # Ganti dengan camera ID yang sesuai
+        
+        # Run real-time detection
+        detector.run_realtime()
+        
+    except Exception as e:
+        print(f"Error: {e}")
+
+# ===== BAGIAN 5: BATCH INFERENCE FOR PRODUCTION =====
+
+class BatchPatchCoreInference:
+    """
+    Batch inference untuk production deployment
+    """
+    def __init__(self, model_path, batch_size=16):
+        self.model, self.threshold = load_patchcore_model(model_path)
+        self.batch_size = batch_size
+        
+        self.transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    
+    def predict_image(self, image_path):
+        """Predict single image"""
+        image = Image.open(image_path).convert('RGB')
+        tensor = self.transform(image).unsqueeze(0).to(self.model.device)
+        
+        with torch.no_grad():
+            features = self.model.feature_extractor(tensor)
+            embeddings = self.model._embed_features(features)
+            
+            if self.model.dimension_reducer is not None:
+                embeddings_np = embeddings.cpu().numpy()
+                embeddings_np = self.model.dimension_reducer.transform(embeddings_np)
+            else:
+                embeddings_np = embeddings.cpu().numpy()
+            
+            distances, _ = self.model.nn_searcher.kneighbors(embeddings_np)
+            spatial_size = int(np.sqrt(embeddings_np.shape[0]))
+            score_map = distances[:, 0].reshape(spatial_size, spatial_size)
+            score_map_resized = cv2.resize(score_map, (224, 224))
+            
+            anomaly_score = np.max(score_map_resized)
+            is_anomaly = anomaly_score > self.threshold
+            
+            return {
+                'anomaly_score': float(anomaly_score),
+                'is_anomaly': bool(is_anomaly),
+                'threshold': float(self.threshold),
+                'heatmap': score_map_resized
+            }
+    
+    def predict_batch(self, image_paths):
+        """Predict batch of images"""
+        results = []
+        for path in image_paths:
+            result = self.predict_image(path)
+            result['image_path'] = path
+            results.append(result)
+        return results
+
+# ===== CONTOH PENGGUNAAN =====
+
+print("\n" + "="*60)
+print("📁 MODEL SAVED SUCCESSFULLY!")
+print("="*60)
+
+print("\n🔧 Untuk menggunakan model yang disimpan:")
+print("1. Real-time camera detection:")
+print(f"   run_realtime_demo('{saved_paths['joblib_path']}')")
+
+print("\n2. Batch inference:")
+print("   inference = BatchPatchCoreInference('path/to/model.joblib')")
+print("   result = inference.predict_image('path/to/image.jpg')")
+
+print("\n3. Load model manual:")
+print("   model, threshold = load_patchcore_model('path/to/model.joblib')")
+
+print(f"\n💾 Files saved:")
+for key, path in saved_paths.items():
+    if path:
+        print(f"   {key}: {path}")
+
+# Uncomment untuk langsung run real-time demo (hanya jika ada camera)
+# run_realtime_demo(saved_paths['joblib_path'])
