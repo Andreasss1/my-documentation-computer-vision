@@ -1,0 +1,325 @@
+# =============================================
+# COMPLETE YOLOV8M TRAINING IMPLEMENTATION
+# Optimized for Small Defect Detection (NG Detection)
+# Google Colab Implementation
+# =============================================
+
+# Install required packages
+!pip install ultralytics
+!pip install roboflow
+
+import os
+import yaml
+import json
+import torch
+import shutil
+from pathlib import Path
+from ultralytics import YOLO
+from sklearn.model_selection import train_test_split
+
+# =============================================
+# 1. SETUP DIRECTORIES AND PATHS
+# =============================================
+
+# Define paths
+BASE_DIR = "/content"
+DATA_DIR = "/content/data"
+IMAGES_DIR = os.path.join(DATA_DIR, "images")
+LABELS_DIR = os.path.join(DATA_DIR, "labels")
+CLASSES_FILE = os.path.join(DATA_DIR, "classes.txt")
+NOTES_FILE = os.path.join(DATA_DIR, "notes.json")
+
+# Create training structure
+DATASET_DIR = "/content/dataset"
+TRAIN_IMAGES_DIR = os.path.join(DATASET_DIR, "train/images")
+TRAIN_LABELS_DIR = os.path.join(DATASET_DIR, "train/labels")
+VAL_IMAGES_DIR = os.path.join(DATASET_DIR, "val/images")
+VAL_LABELS_DIR = os.path.join(DATASET_DIR, "val/labels")
+
+# Create directories
+os.makedirs(TRAIN_IMAGES_DIR, exist_ok=True)
+os.makedirs(TRAIN_LABELS_DIR, exist_ok=True)
+os.makedirs(VAL_IMAGES_DIR, exist_ok=True)
+os.makedirs(VAL_LABELS_DIR, exist_ok=True)
+
+print("✅ Directories created successfully!")
+
+# =============================================
+# 2. READ CLASSES AND NOTES
+# =============================================
+
+# Read classes
+try:
+    with open(CLASSES_FILE, 'r', encoding='utf-8') as f:
+        classes = [line.strip() for line in f.readlines() if line.strip()]
+    print(f"✅ Found {len(classes)} classes: {classes}")
+except FileNotFoundError:
+    print("❌ classes.txt not found! Please check your data structure.")
+    exit()
+
+# Read notes (optional)
+try:
+    with open(NOTES_FILE, 'r', encoding='utf-8') as f:
+        notes = json.load(f)
+    print(f"✅ Notes loaded: {notes}")
+except FileNotFoundError:
+    print("⚠️ notes.json not found, proceeding without notes.")
+    notes = {}
+
+# =============================================
+# 3. SPLIT DATASET INTO TRAIN/VAL
+# =============================================
+
+# Get all image files
+image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']
+image_files = []
+
+for ext in image_extensions:
+    image_files.extend([f for f in os.listdir(IMAGES_DIR) if f.lower().endswith(ext.lower())])
+
+print(f"✅ Found {len(image_files)} images")
+
+# Split dataset (80% train, 20% validation)
+train_files, val_files = train_test_split(image_files, test_size=0.2, random_state=42)
+
+print(f"📊 Dataset split:")
+print(f"   - Training: {len(train_files)} images")
+print(f"   - Validation: {len(val_files)} images")
+
+# =============================================
+# 4. COPY FILES TO TRAIN/VAL STRUCTURE
+# =============================================
+
+def copy_files(file_list, dest_images_dir, dest_labels_dir):
+    """Copy image and label files to destination directories"""
+    copied_count = 0
+    for filename in file_list:
+        # Copy image
+        src_image = os.path.join(IMAGES_DIR, filename)
+        dst_image = os.path.join(dest_images_dir, filename)
+        
+        if os.path.exists(src_image):
+            shutil.copy2(src_image, dst_image)
+            
+            # Copy corresponding label
+            base_name = os.path.splitext(filename)[0]
+            label_filename = base_name + '.txt'
+            src_label = os.path.join(LABELS_DIR, label_filename)
+            dst_label = os.path.join(dest_labels_dir, label_filename)
+            
+            if os.path.exists(src_label):
+                shutil.copy2(src_label, dst_label)
+                copied_count += 1
+            else:
+                print(f"⚠️ Label not found for {filename}")
+        else:
+            print(f"⚠️ Image not found: {filename}")
+    
+    return copied_count
+
+# Copy training files
+print("📁 Copying training files...")
+train_copied = copy_files(train_files, TRAIN_IMAGES_DIR, TRAIN_LABELS_DIR)
+
+# Copy validation files
+print("📁 Copying validation files...")
+val_copied = copy_files(val_files, VAL_IMAGES_DIR, VAL_LABELS_DIR)
+
+print(f"✅ Files copied successfully!")
+print(f"   - Training: {train_copied} image-label pairs")
+print(f"   - Validation: {val_copied} image-label pairs")
+
+# =============================================
+# 5. CREATE DATA.YAML FILE
+# =============================================
+
+# Create data.yaml configuration
+data_yaml = {
+    'train': TRAIN_IMAGES_DIR,
+    'val': VAL_IMAGES_DIR,
+    'nc': len(classes),  # number of classes
+    'names': classes     # class names
+}
+
+# Save data.yaml
+yaml_path = '/content/data.yaml'
+with open(yaml_path, 'w') as f:
+    yaml.dump(data_yaml, f, default_flow_style=False)
+
+print(f"✅ data.yaml created at: {yaml_path}")
+print("📄 Data.yaml content:")
+print(yaml.dump(data_yaml, default_flow_style=False))
+
+# =============================================
+# 6. VERIFY DATASET STRUCTURE
+# =============================================
+
+print("\n🔍 Verifying dataset structure...")
+print(f"📁 Dataset structure:")
+print(f"   /content/dataset/")
+print(f"   ├── train/")
+print(f"   │   ├── images/ ({len(os.listdir(TRAIN_IMAGES_DIR))} files)")
+print(f"   │   └── labels/ ({len(os.listdir(TRAIN_LABELS_DIR))} files)")
+print(f"   └── val/")
+print(f"       ├── images/ ({len(os.listdir(VAL_IMAGES_DIR))} files)")
+print(f"       └── labels/ ({len(os.listdir(VAL_LABELS_DIR))} files)")
+
+# =============================================
+# 7. CHECK GPU AVAILABILITY
+# =============================================
+
+print(f"\n🖥️ GPU Information:")
+if torch.cuda.is_available():
+    print(f"   - CUDA Available: ✅")
+    print(f"   - GPU Device: {torch.cuda.get_device_name(0)}")
+    print(f"   - CUDA Version: {torch.version.cuda}")
+    device = 0
+else:
+    print(f"   - CUDA Available: ❌")
+    print(f"   - Using CPU training (will be slower)")
+    device = 'cpu'
+
+# =============================================
+# 8. INITIALIZE AND TRAIN YOLOV8M MODEL
+# =============================================
+
+print("\n🚀 Starting YOLOv8m Training...")
+print("=" * 60)
+
+# Initialize model
+model = YOLO('yolov8m.pt')
+print("✅ YOLOv8m model loaded successfully!")
+
+# COMPLETE TRAINING PARAMETERS
+try:
+    results = model.train(
+        # === DATA & PROJECT SETTINGS ===
+        data=yaml_path,                    # Path to our data.yaml
+        project='ng_detection',            # Project name
+        name='yolov8m_small_defects_v1',   # Run name
+        exist_ok=True,                     # Overwrite existing project
+        
+        # === BASIC TRAINING PARAMETERS ===
+        epochs=300,                        # Epoch tinggi untuk small objects
+        batch=8,                          # Batch size optimal untuk YOLOv8m
+        imgsz=1280,                       # PENTING: Ukuran besar untuk defect kecil
+        device=device,                     # GPU/CPU device
+        workers=8,                        # Dataloader workers
+        cache=True,                       # Cache images untuk speed up
+        
+        # === OPTIMIZATION PARAMETERS ===
+        optimizer='AdamW',                # Lebih baik dari SGD untuk small objects
+        lr0=0.0008,                      # Learning rate rendah untuk stabilitas
+        lrf=0.01,                        # Final learning rate
+        momentum=0.937,                   # Momentum
+        weight_decay=0.0005,              # Weight decay
+        
+        # === ADDITIONAL PARAMETERS FOR SMALL OBJECTS ===
+        patience=50,                      # Early stopping patience
+        save=True,                        # Save checkpoints
+        save_period=10,                   # Save every N epochs
+        val=True,                         # Validate during training
+        plots=True,                       # Generate plots
+        verbose=True,                     # Verbose output
+        
+        # === AUGMENTATION SETTINGS (good for small defects) ===
+        hsv_h=0.015,                     # Hue augmentation
+        hsv_s=0.7,                       # Saturation augmentation  
+        hsv_v=0.4,                       # Value augmentation
+        degrees=0.0,                     # Rotation (minimal untuk defects)
+        translate=0.1,                   # Translation
+        scale=0.5,                       # Scale augmentation
+        shear=0.0,                       # Shear (disabled untuk defects)
+        perspective=0.0,                 # Perspective (disabled)
+        flipud=0.0,                      # Flip up-down (disabled)
+        fliplr=0.5,                      # Flip left-right
+        mosaic=1.0,                      # Mosaic augmentation
+        mixup=0.0,                       # Mixup augmentation
+        copy_paste=0.0                   # Copy-paste augmentation
+    )
+    
+    print("\n🎉 Training completed successfully!")
+    print(f"📊 Results saved in: ng_detection/yolov8m_small_defects_v1/")
+    
+except Exception as e:
+    print(f"❌ Training failed with error: {str(e)}")
+
+# =============================================
+# 9. POST-TRAINING ANALYSIS
+# =============================================
+
+print("\n📈 Post-Training Analysis:")
+print("=" * 40)
+
+# Check if training results exist
+results_dir = "/content/ng_detection/yolov8m_small_defects_v1"
+if os.path.exists(results_dir):
+    print(f"✅ Training results found in: {results_dir}")
+    
+    # List important files
+    important_files = ['weights/best.pt', 'weights/last.pt', 'results.png', 'confusion_matrix.png']
+    for file in important_files:
+        file_path = os.path.join(results_dir, file)
+        if os.path.exists(file_path):
+            print(f"   ✅ {file}")
+        else:
+            print(f"   ❌ {file} (not found)")
+            
+    # Show best model path
+    best_model_path = os.path.join(results_dir, 'weights/best.pt')
+    if os.path.exists(best_model_path):
+        print(f"\n🏆 Best model saved at: {best_model_path}")
+        print("   Use this model for inference!")
+else:
+    print(f"❌ Training results not found")
+
+print("\n✅ Implementation completed!")
+print("🔥 Your YOLOv8m model is ready for small defect detection!")
+
+# =============================================
+# 10. QUICK INFERENCE TEST (OPTIONAL)
+# =============================================
+
+print("\n🧪 Quick Inference Test:")
+print("=" * 30)
+
+try:
+    # Load the best model
+    best_model_path = f"{results_dir}/weights/best.pt"
+    if os.path.exists(best_model_path):
+        trained_model = YOLO(best_model_path)
+        print("✅ Best model loaded successfully!")
+        
+        # Test on a validation image
+        if val_files:
+            test_image = os.path.join(VAL_IMAGES_DIR, val_files[0])
+            if os.path.exists(test_image):
+                print(f"🔍 Testing on: {val_files[0]}")
+                
+                # Run inference
+                results = trained_model(test_image)
+                
+                # Save results
+                results[0].save(f"/content/test_result_{val_files[0]}")
+                print(f"💾 Test result saved as: test_result_{val_files[0]}")
+            else:
+                print("❌ Test image not found")
+        else:
+            print("❌ No validation images available for testing")
+    else:
+        print("❌ Best model not found")
+        
+except Exception as e:
+    print(f"⚠️ Inference test failed: {str(e)}")
+
+print("\n" + "="*60)
+print("🎯 TRAINING SUMMARY")
+print("="*60)
+print(f"📁 Dataset: {len(image_files)} total images")
+print(f"🏷️ Classes: {len(classes)} ({', '.join(classes)})")
+print(f"🚂 Training: {len(train_files)} images")
+print(f"✅ Validation: {len(val_files)} images") 
+print(f"🖼️ Image Size: 1280px (optimized for small defects)")
+print(f"⚙️ Model: YOLOv8m with AdamW optimizer")
+print(f"📊 Results: /content/ng_detection/yolov8m_small_defects_v1/")
+print("="*60)
